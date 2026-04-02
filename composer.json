@@ -1,0 +1,40 @@
+{
+    "name": "featureflip/featureflip-php",
+    "description": "Featureflip server-side PHP SDK for feature flag evaluation",
+    "type": "library",
+    "license": "Apache-2.0",
+    "homepage": "https://featureflip.io",
+    "keywords": ["feature-flags", "feature-toggles", "sdk"],
+    "authors": [
+        {
+            "name": "Featureflip Team",
+            "homepage": "https://featureflip.io"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "ext-mbstring": "*",
+        "ext-json": "*",
+        "psr/simple-cache": "^3.0",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^2.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0 || ^13.0",
+        "guzzlehttp/guzzle": "^7.0",
+        "symfony/cache": "^7.0",
+        "guzzlehttp/psr7": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Featureflip\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Featureflip\\Tests\\": "tests/"
+        }
+    },
+    "minimum-stability": "stable"
+}
