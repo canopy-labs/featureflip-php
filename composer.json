@@ -5,6 +5,10 @@
     "license": "Apache-2.0",
     "homepage": "https://featureflip.io",
     "keywords": ["feature-flags", "feature-toggles", "sdk"],
+    "support": {
+        "source": "https://github.com/canopy-labs/featureflip-php",
+        "issues": "https://github.com/canopy-labs/featureflip-php/issues"
+    },
     "authors": [
         {
             "name": "Featureflip Team",
