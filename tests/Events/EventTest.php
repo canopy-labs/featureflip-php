@@ -32,4 +32,18 @@ final class EventTest extends TestCase
         $this->assertSame('Identify', $event->type);
         $this->assertSame('Identify', $event->data['type']);
     }
+
+    public function testIdentifyEventIncludesFlagKey(): void
+    {
+        $event = Event::identify(['user_id' => '123']);
+
+        $this->assertSame('$identify', $event->data['flagKey']);
+    }
+
+    public function testIdentifyEventDoesNotIncludeContext(): void
+    {
+        $event = Event::identify(['user_id' => '123', 'email' => 'test@example.com']);
+
+        $this->assertArrayNotHasKey('context', $event->data);
+    }
 }

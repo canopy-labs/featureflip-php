@@ -50,9 +50,9 @@ final class Event
     {
         return new self('Identify', [
             'type' => 'Identify',
+            'flagKey' => '$identify',
             'userId' => (string) ($context['user_id'] ?? ''),
             'timestamp' => (new \DateTimeImmutable())->format('c'),
-            'context' => $context,
         ]);
     }
 }
