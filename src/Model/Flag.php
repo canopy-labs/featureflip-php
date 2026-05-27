@@ -6,7 +6,11 @@ namespace Featureflip\Model;
 
 final class Flag
 {
-    /** @param Variation[] $variations @param Rule[] $rules */
+    /**
+     * @param Variation[] $variations
+     * @param Rule[] $rules
+     * @param Prerequisite[] $prerequisites
+     */
     public function __construct(
         public readonly string $key,
         public readonly int $version,
@@ -16,6 +20,7 @@ final class Flag
         public readonly array $rules,
         public readonly ?ServeConfig $fallthrough,
         public readonly ?string $offVariation,
+        public readonly array $prerequisites = [],
     ) {}
 
     public function getVariation(string $key): ?Variation
@@ -45,6 +50,10 @@ final class Flag
             ),
             fallthrough: isset($data['fallthrough']) ? ServeConfig::fromArray($data['fallthrough']) : null,
             offVariation: $data['offVariation'] ?? null,
+            prerequisites: array_map(
+                fn(array $p) => Prerequisite::fromArray($p),
+                $data['prerequisites'] ?? [],
+            ),
         );
     }
 }

@@ -33,6 +33,14 @@ final class FlagStore
     }
 
     /**
+     * @return array<string, Flag>
+     */
+    public function getFlags(): array
+    {
+        return $this->flags;
+    }
+
+    /**
      * @return array<string, Segment>
      */
     public function getSegments(): array
@@ -138,6 +146,10 @@ final class FlagStore
             ], $flag->rules),
             'fallthrough' => $flag->fallthrough ? $this->serveToArray($flag->fallthrough) : null,
             'offVariation' => $flag->offVariation,
+            'prerequisites' => array_map(fn($p) => [
+                'prerequisiteFlagKey' => $p->prerequisiteFlagKey,
+                'expectedVariationKey' => $p->expectedVariationKey,
+            ], $flag->prerequisites),
         ];
     }
 

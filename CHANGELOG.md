@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Prerequisite flag support.** Flags can declare other flags as prerequisites; the flag's rules and fallthrough only run when every prerequisite serves the expected variation, otherwise the off variation is served with `reason = 'PREREQUISITE_FAILED'` and `prerequisiteKey` set on the `EvaluationDetail`. Resolution is recursive (depth-capped at 10, exceeded chains return `reason = 'ERROR'`) with per-call memoisation. New types: `Featureflip\Model\Prerequisite`. New `EvaluationDetail` field: `prerequisiteKey`. New batch entry point: `Evaluator::evaluateWithSharedMemo()`.
+
 ## 2.0.0
 
 ### BREAKING

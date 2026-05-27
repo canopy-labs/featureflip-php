@@ -139,8 +139,9 @@ final class SharedFeatureflipCore
 
         $flag = $this->store?->getFlag($key);
         $segments = $this->store?->getSegments() ?? [];
+        $allFlags = $this->store?->getFlags() ?? [];
 
-        $detail = $this->evaluator->evaluate($flag, $context, $segments);
+        $detail = $this->evaluator->evaluate($flag, $context, $segments, $allFlags);
 
         // Track evaluation event
         $this->eventProcessor?->push(Event::evaluation($key, $context, $detail->variationKey));

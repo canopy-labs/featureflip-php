@@ -11,5 +11,6 @@ final class EvaluationDetail
         public readonly string $reason,
         public readonly ?string $ruleId = null,
         public readonly ?string $variationKey = null,
+        public readonly ?string $prerequisiteKey = null,
     ) {}
 }

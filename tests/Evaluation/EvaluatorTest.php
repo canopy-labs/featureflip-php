@@ -6,7 +6,7 @@ namespace Featureflip\Tests\Evaluation;
 
 use Featureflip\Evaluation\Evaluator;
 use Featureflip\EvaluationDetail;
-use Featureflip\Model\{Condition, ConditionGroup, Flag, Rule, Segment, ServeConfig, Variation, WeightedVariation};
+use Featureflip\Model\{Condition, ConditionGroup, Flag, Prerequisite, Rule, Segment, ServeConfig, Variation, WeightedVariation};
 use PHPUnit\Framework\TestCase;
 
 final class EvaluatorTest extends TestCase
@@ -311,5 +311,223 @@ final class EvaluatorTest extends TestCase
         $detail = $this->evaluator->evaluate($flag, ['user_id' => '123'], []);
         $this->assertTrue($detail->value);
         $this->assertSame('RULE_MATCH', $detail->reason);
+    }
+
+    /**
+     * @param Prerequisite[] $prerequisites
+     */
+    private function makeFlag(
+        string $key = 'main',
+        bool $enabled = true,
+        string $fallthroughVariation = 'on',
+        array $prerequisites = [],
+    ): Flag {
+        return new Flag(
+            key: $key,
+            version: 1,
+            type: 'boolean',
+            enabled: $enabled,
+            variations: [new Variation('on', true), new Variation('off', false)],
+            rules: [],
+            fallthrough: new ServeConfig('Fixed', $fallthroughVariation, null, null, null),
+            offVariation: 'off',
+            prerequisites: $prerequisites,
+        );
+    }
+
+    public function testNoPrerequisitesFallsThrough(): void
+    {
+        $flag = $this->makeFlag();
+        $detail = $this->evaluator->evaluate($flag, ['user_id' => 'u'], [], []);
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+        $this->assertTrue($detail->value);
+        $this->assertNull($detail->prerequisiteKey);
+    }
+
+    public function testSatisfiedPrerequisiteFallsThrough(): void
+    {
+        $prereq = $this->makeFlag(key: 'prereq', fallthroughVariation: 'on');
+        $main = $this->makeFlag(
+            key: 'main',
+            prerequisites: [new Prerequisite('prereq', 'on')],
+        );
+
+        $detail = $this->evaluator->evaluate(
+            $main,
+            ['user_id' => 'u'],
+            [],
+            ['prereq' => $prereq],
+        );
+
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+        $this->assertTrue($detail->value);
+        $this->assertNull($detail->prerequisiteKey);
+    }
+
+    public function testUnsatisfiedPrerequisiteServesOff(): void
+    {
+        $prereq = $this->makeFlag(key: 'prereq', fallthroughVariation: 'off');
+        $main = $this->makeFlag(
+            key: 'main',
+            prerequisites: [new Prerequisite('prereq', 'on')],
+        );
+
+        $detail = $this->evaluator->evaluate(
+            $main,
+            ['user_id' => 'u'],
+            [],
+            ['prereq' => $prereq],
+        );
+
+        $this->assertSame('PREREQUISITE_FAILED', $detail->reason);
+        $this->assertFalse($detail->value);
+        $this->assertSame('prereq', $detail->prerequisiteKey);
+        $this->assertSame('off', $detail->variationKey);
+    }
+
+    public function testDisabledPrerequisiteServesOff(): void
+    {
+        $prereq = $this->makeFlag(key: 'prereq', enabled: false);
+        $main = $this->makeFlag(
+            key: 'main',
+            prerequisites: [new Prerequisite('prereq', 'on')],
+        );
+
+        $detail = $this->evaluator->evaluate(
+            $main,
+            ['user_id' => 'u'],
+            [],
+            ['prereq' => $prereq],
+        );
+
+        $this->assertSame('PREREQUISITE_FAILED', $detail->reason);
+        $this->assertSame('prereq', $detail->prerequisiteKey);
+    }
+
+    public function testMultiPrereqReportsFirstFailingKey(): void
+    {
+        $a = $this->makeFlag(key: 'prereq-a', fallthroughVariation: 'off');
+        $b = $this->makeFlag(key: 'prereq-b', fallthroughVariation: 'off');
+        $main = $this->makeFlag(
+            key: 'main',
+            prerequisites: [
+                new Prerequisite('prereq-a', 'on'),
+                new Prerequisite('prereq-b', 'on'),
+            ],
+        );
+
+        $detail = $this->evaluator->evaluate(
+            $main,
+            ['user_id' => 'u'],
+            [],
+            ['prereq-a' => $a, 'prereq-b' => $b],
+        );
+
+        $this->assertSame('PREREQUISITE_FAILED', $detail->reason);
+        $this->assertSame('prereq-a', $detail->prerequisiteKey);
+    }
+
+    public function testChainedPrerequisitesResolveRecursively(): void
+    {
+        $grandchild = $this->makeFlag(key: 'grandchild', fallthroughVariation: 'on');
+        $child = $this->makeFlag(
+            key: 'child',
+            fallthroughVariation: 'on',
+            prerequisites: [new Prerequisite('grandchild', 'on')],
+        );
+        $main = $this->makeFlag(
+            key: 'main',
+            prerequisites: [new Prerequisite('child', 'on')],
+        );
+
+        $detail = $this->evaluator->evaluate(
+            $main,
+            ['user_id' => 'u'],
+            [],
+            ['grandchild' => $grandchild, 'child' => $child],
+        );
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+        $this->assertTrue($detail->value);
+
+        // Break the chain at the grandchild level — failure bubbles to main.
+        $grandchildFailing = $this->makeFlag(
+            key: 'grandchild',
+            fallthroughVariation: 'off',
+        );
+        $detail2 = $this->evaluator->evaluate(
+            $main,
+            ['user_id' => 'u'],
+            [],
+            ['grandchild' => $grandchildFailing, 'child' => $child],
+        );
+        $this->assertSame('PREREQUISITE_FAILED', $detail2->reason);
+    }
+
+    public function testMissingPrerequisiteFlagFailsSafely(): void
+    {
+        $main = $this->makeFlag(
+            key: 'main',
+            prerequisites: [new Prerequisite('missing-flag', 'on')],
+        );
+
+        $detail = $this->evaluator->evaluate($main, ['user_id' => 'u'], [], []);
+
+        $this->assertSame('PREREQUISITE_FAILED', $detail->reason);
+        $this->assertSame('missing-flag', $detail->prerequisiteKey);
+        $this->assertFalse($detail->value);
+    }
+
+    public function testDepthExceededReturnsError(): void
+    {
+        $flags = [];
+        for ($i = 0; $i < 12; $i++) {
+            $prereqs = $i > 0 ? [new Prerequisite("flag-" . ($i - 1), 'on')] : [];
+            $flags["flag-$i"] = $this->makeFlag(
+                key: "flag-$i",
+                fallthroughVariation: 'on',
+                prerequisites: $prereqs,
+            );
+        }
+
+        $detail = $this->evaluator->evaluate(
+            $flags['flag-11'],
+            ['user_id' => 'u'],
+            [],
+            $flags,
+        );
+
+        $this->assertSame('ERROR', $detail->reason);
+    }
+
+    public function testEvaluateWithSharedMemoReusesResult(): void
+    {
+        $prereq = $this->makeFlag(key: 'prereq', fallthroughVariation: 'on');
+        $main = $this->makeFlag(
+            key: 'main',
+            prerequisites: [new Prerequisite('prereq', 'on')],
+        );
+
+        $memo = [];
+        $detail = $this->evaluator->evaluateWithSharedMemo(
+            $main,
+            ['user_id' => 'u'],
+            [],
+            ['prereq' => $prereq],
+            $memo,
+        );
+
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+        $this->assertArrayHasKey('prereq', $memo);
+        $this->assertArrayHasKey('main', $memo);
+    }
+
+    public function testBackwardCompatibleEvaluateSignature(): void
+    {
+        // Existing callers that omit $allFlags must still work for flags
+        // without prerequisites.
+        $flag = $this->makeFlag();
+        $detail = $this->evaluator->evaluate($flag, ['user_id' => 'u'], []);
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+        $this->assertTrue($detail->value);
     }
 }

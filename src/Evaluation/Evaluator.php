@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Featureflip\Evaluation;
 
 use Featureflip\EvaluationDetail;
-use Featureflip\Model\{Condition, ConditionGroup, Flag, Rule, Segment, ServeConfig};
+use Featureflip\Model\{Condition, ConditionGroup, Flag, Prerequisite, Rule, Segment, ServeConfig};
 
 final class Evaluator
 {
+    public const MAX_PREREQUISITE_DEPTH = 10;
+
     private ConditionEvaluator $conditionEvaluator;
 
     public function __construct()
@@ -17,20 +19,122 @@ final class Evaluator
     }
 
     /**
+     * Evaluate a flag against a context.
+     *
      * @param array<string, mixed> $context
      * @param array<string, Segment> $segments
+     * @param array<string, Flag> $allFlags Map of all flags in the environment,
+     *                                       keyed by flag key. Required for
+     *                                       prerequisite resolution; pass an
+     *                                       empty array when the flag has no
+     *                                       prerequisites.
      */
-    public function evaluate(?Flag $flag, array $context, array $segments): EvaluationDetail
+    public function evaluate(?Flag $flag, array $context, array $segments, array $allFlags = []): EvaluationDetail
     {
         if ($flag === null) {
             return new EvaluationDetail(null, 'FLAG_NOT_FOUND');
         }
 
+        $memo = [];
+        return $this->evaluateInternal($flag, $context, $segments, $allFlags, 0, $memo);
+    }
+
+    /**
+     * Evaluate a flag while sharing a memoisation map with other calls.
+     *
+     * Use this when evaluating multiple flags in one batch so shared
+     * prerequisites are only evaluated once.
+     *
+     * @param array<string, mixed> $context
+     * @param array<string, Segment> $segments
+     * @param array<string, Flag> $allFlags
+     * @param array<string, EvaluationDetail> $memo Reference parameter; updated
+     *                                              with each flag's result.
+     */
+    public function evaluateWithSharedMemo(
+        Flag $flag,
+        array $context,
+        array $segments,
+        array $allFlags,
+        array &$memo,
+    ): EvaluationDetail {
+        return $this->evaluateInternal($flag, $context, $segments, $allFlags, 0, $memo);
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     * @param array<string, Segment> $segments
+     * @param array<string, Flag> $allFlags
+     * @param array<string, EvaluationDetail> $memo
+     */
+    private function evaluateInternal(
+        Flag $flag,
+        array $context,
+        array $segments,
+        array $allFlags,
+        int $depth,
+        array &$memo,
+    ): EvaluationDetail {
+        // Guard: cycle detection happens at write time; this is a safety net.
+        if ($depth > self::MAX_PREREQUISITE_DEPTH) {
+            $result = $this->serveOff($flag, 'ERROR');
+            $memo[$flag->key] = $result;
+            return $result;
+        }
+
         if (!$flag->enabled) {
-            $value = $flag->offVariation !== null
-                ? $flag->getVariation($flag->offVariation)?->value
-                : null;
-            return new EvaluationDetail($value, 'FLAG_DISABLED');
+            $result = $this->serveOff($flag, 'FLAG_DISABLED');
+            $memo[$flag->key] = $result;
+            return $result;
+        }
+
+        // Resolve prerequisites before rules or fallthrough.
+        foreach ($flag->prerequisites as $prereq) {
+            $prereqResult = $memo[$prereq->prerequisiteFlagKey] ?? null;
+
+            if ($prereqResult === null) {
+                $prereqFlag = $allFlags[$prereq->prerequisiteFlagKey] ?? null;
+
+                if ($prereqFlag === null) {
+                    // Missing flag: fail safely. Memo key is the current flag's
+                    // key (matches the JS reference) — the prereq itself has
+                    // no result to memoise.
+                    $result = $this->serveOff(
+                        $flag,
+                        'PREREQUISITE_FAILED',
+                        $prereq->prerequisiteFlagKey,
+                    );
+                    $memo[$flag->key] = $result;
+                    return $result;
+                }
+
+                $prereqResult = $this->evaluateInternal(
+                    $prereqFlag,
+                    $context,
+                    $segments,
+                    $allFlags,
+                    $depth + 1,
+                    $memo,
+                );
+                $memo[$prereq->prerequisiteFlagKey] = $prereqResult;
+            }
+
+            // Bubble errors from recursive evaluation.
+            if ($prereqResult->reason === 'ERROR') {
+                $result = $this->serveOff($flag, 'ERROR');
+                $memo[$flag->key] = $result;
+                return $result;
+            }
+
+            if ($prereqResult->variationKey !== $prereq->expectedVariationKey) {
+                $result = $this->serveOff(
+                    $flag,
+                    'PREREQUISITE_FAILED',
+                    $prereq->prerequisiteFlagKey,
+                );
+                $memo[$flag->key] = $result;
+                return $result;
+            }
         }
 
         // Sort rules by priority ascending
@@ -39,18 +143,33 @@ final class Evaluator
 
         foreach ($rules as $rule) {
             if ($this->evaluateRule($rule, $context, $segments)) {
-                $value = $this->resolveServe($flag, $rule->serve, $context);
-                return new EvaluationDetail($value, 'RULE_MATCH', $rule->id, $this->resolveVariationKey($flag, $rule->serve, $context));
+                $variationKey = $this->resolveVariationKey($flag, $rule->serve, $context);
+                $value = $variationKey !== null ? $flag->getVariation($variationKey)?->value : null;
+                $result = new EvaluationDetail($value, 'RULE_MATCH', $rule->id, $variationKey);
+                $memo[$flag->key] = $result;
+                return $result;
             }
         }
 
-        // Fallthrough
         if ($flag->fallthrough !== null) {
-            $value = $this->resolveServe($flag, $flag->fallthrough, $context);
-            return new EvaluationDetail($value, 'FALLTHROUGH', null, $this->resolveVariationKey($flag, $flag->fallthrough, $context));
+            $variationKey = $this->resolveVariationKey($flag, $flag->fallthrough, $context);
+            $value = $variationKey !== null ? $flag->getVariation($variationKey)?->value : null;
+            $result = new EvaluationDetail($value, 'FALLTHROUGH', null, $variationKey);
+            $memo[$flag->key] = $result;
+            return $result;
         }
 
-        return new EvaluationDetail(null, 'FALLTHROUGH');
+        $result = new EvaluationDetail(null, 'FALLTHROUGH');
+        $memo[$flag->key] = $result;
+        return $result;
+    }
+
+    private function serveOff(Flag $flag, string $reason, ?string $prerequisiteKey = null): EvaluationDetail
+    {
+        $value = $flag->offVariation !== null
+            ? $flag->getVariation($flag->offVariation)?->value
+            : null;
+        return new EvaluationDetail($value, $reason, null, $flag->offVariation, $prerequisiteKey);
     }
 
     /**
@@ -117,18 +236,6 @@ final class Evaluator
             }
         }
         return true;
-    }
-
-    /**
-     * @param array<string, mixed> $context
-     */
-    private function resolveServe(Flag $flag, ServeConfig $serve, array $context): mixed
-    {
-        $variationKey = $this->resolveVariationKey($flag, $serve, $context);
-        if ($variationKey === null) {
-            return null;
-        }
-        return $flag->getVariation($variationKey)?->value;
     }
 
     /**
