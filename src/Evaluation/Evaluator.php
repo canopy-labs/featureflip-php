@@ -143,7 +143,7 @@ final class Evaluator
 
         foreach ($rules as $rule) {
             if ($this->evaluateRule($rule, $context, $segments)) {
-                $variationKey = $this->resolveVariationKey($flag, $rule->serve, $context);
+                $variationKey = $this->resolveVariationKey($rule->serve, $context);
                 $value = $variationKey !== null ? $flag->getVariation($variationKey)?->value : null;
                 $result = new EvaluationDetail($value, 'RULE_MATCH', $rule->id, $variationKey);
                 $memo[$flag->key] = $result;
@@ -152,7 +152,7 @@ final class Evaluator
         }
 
         if ($flag->fallthrough !== null) {
-            $variationKey = $this->resolveVariationKey($flag, $flag->fallthrough, $context);
+            $variationKey = $this->resolveVariationKey($flag->fallthrough, $context);
             $value = $variationKey !== null ? $flag->getVariation($variationKey)?->value : null;
             $result = new EvaluationDetail($value, 'FALLTHROUGH', null, $variationKey);
             $memo[$flag->key] = $result;
@@ -241,15 +241,19 @@ final class Evaluator
     /**
      * @param array<string, mixed> $context
      */
-    private function resolveVariationKey(Flag $flag, ServeConfig $serve, array $context): ?string
+    private function resolveVariationKey(ServeConfig $serve, array $context): ?string
     {
         if ($serve->type === 'Fixed') {
             return $serve->variation;
         }
 
         // Rollout
+        // A Rollout serve can arrive with no weighted variations — env-level PercentageRollout
+        // has nowhere to store per-variation weights, so the mapper emits type=Rollout with no
+        // variations (#1469). Degrade to the default fixed variation instead of returning null.
+        // Mirrors the engine + C#/Java SDK evaluators.
         if ($serve->variations === null || count($serve->variations) === 0) {
-            return null;
+            return $serve->variation;
         }
 
         $bucketBy = $serve->bucketBy ?? 'userId';
@@ -261,7 +265,15 @@ final class Evaluator
             $bucketValue = $context['userId'] ?? null;
         }
         $bucketValue = $bucketValue !== null ? (string) $bucketValue : '';
-        $salt = $serve->salt !== null && $serve->salt !== '' ? $serve->salt : $flag->key;
+        // Keyless user contexts can't be bucketed. Rather than hashing the empty value
+        // into an arbitrary salt-dependent bucket, serve the control (first) variation
+        // deterministically. The engine assigns a random GUID per eval (spreading
+        // anonymous users over HTTP); local SDK eval is deterministic, so parity is
+        // guaranteed only for keyed contexts (#1457).
+        if ($bucketValue === '' && ($bucketBy === 'userId' || $bucketBy === 'user_id') && count($serve->variations) > 0) {
+            return $serve->variations[0]->key;
+        }
+        $salt = $serve->salt ?? '';
         $bucket = Bucketing::bucket($salt, $bucketValue);
 
         $cumulative = 0;

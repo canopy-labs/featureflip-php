@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Featureflip\Tests\Evaluation;
 
+use Featureflip\Evaluation\Bucketing;
 use Featureflip\Evaluation\Evaluator;
 use Featureflip\EvaluationDetail;
 use Featureflip\Model\{Condition, ConditionGroup, Flag, Prerequisite, Rule, Segment, ServeConfig, Variation, WeightedVariation};
@@ -154,6 +155,52 @@ final class EvaluatorTest extends TestCase
 
         $detail = $this->evaluator->evaluate($flag, ['user_id' => 'user-123'], []);
         $this->assertIsBool($detail->value);
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+    }
+
+    public function testKeylessRolloutServesControlVariation(): void
+    {
+        // Thin control weight (1) so an empty-string hash collapse would NOT land
+        // on "on"; the deterministic keyless guard must serve the control instead.
+        $flag = new Flag(
+            key: 'rollout-flag',
+            version: 1,
+            type: 'boolean',
+            enabled: true,
+            variations: [new Variation('on', true), new Variation('off', false)],
+            rules: [],
+            fallthrough: new ServeConfig('Rollout', null, 'userId', 'test-salt', [
+                new WeightedVariation('on', 1),
+                new WeightedVariation('off', 99),
+            ]),
+            offVariation: 'off',
+        );
+
+        for ($i = 0; $i < 20; $i++) {
+            $detail = $this->evaluator->evaluate($flag, [], []);
+            $this->assertTrue($detail->value, "iteration $i should serve the control variation 'on'");
+            $this->assertSame('FALLTHROUGH', $detail->reason);
+        }
+    }
+
+    public function testRolloutServeWithNoVariationsServesDefault(): void
+    {
+        // Env-level PercentageRollout emits a Rollout serve with its default variation set but
+        // no weighted variations (no per-variation weight storage at the env level, #1469).
+        // Degrade to the default variation instead of returning null. Mirrors the engine + C#/Java.
+        $flag = new Flag(
+            key: 'rollout-flag',
+            version: 1,
+            type: 'boolean',
+            enabled: true,
+            variations: [new Variation('on', true), new Variation('off', false)],
+            rules: [],
+            fallthrough: new ServeConfig('Rollout', 'off', 'userId', null, []),
+            offVariation: 'off',
+        );
+
+        $detail = $this->evaluator->evaluate($flag, ['userId' => 'user-1'], []);
+        $this->assertFalse($detail->value);
         $this->assertSame('FALLTHROUGH', $detail->reason);
     }
 
@@ -529,5 +576,56 @@ final class EvaluatorTest extends TestCase
         $detail = $this->evaluator->evaluate($flag, ['user_id' => 'u'], []);
         $this->assertSame('FALLTHROUGH', $detail->reason);
         $this->assertTrue($detail->value);
+    }
+
+    public function testRolloutEmptySaltUsesEmptyNotFlagKey(): void
+    {
+        // A null/empty salt must hash as '' (engine behavior), not the flag key.
+        // Pre-fix PHP substitutes $flag->key for both null and '' salts, so the
+        // served variation diverges from Bucketing::bucket('', uid) for some users.
+        $flag = new Flag(
+            key: 'rollout-flag',
+            version: 1,
+            type: 'Boolean',
+            enabled: true,
+            variations: [new Variation('on', true), new Variation('off', false)],
+            rules: [],
+            fallthrough: new ServeConfig('Rollout', null, 'userId', null, [
+                new WeightedVariation('on', 50),
+                new WeightedVariation('off', 50),
+            ]),
+            offVariation: 'off',
+        );
+
+        for ($i = 0; $i < 50; $i++) {
+            $uid = "user-$i";
+            $detail = $this->evaluator->evaluate($flag, ['user_id' => $uid], []);
+            $expected = Bucketing::bucket('', $uid) < 50 ? 'on' : 'off';
+            $this->assertSame($expected, $detail->variationKey, "user $uid");
+        }
+
+        // An explicit empty-string salt must behave identically to null (both hash as '').
+        // Pre-fix PHP mapped BOTH null and '' to $flag->key; the `?? ''` fix only catches null,
+        // so this case exercises the empty-string branch the old guard also rewrote.
+        $emptySaltFlag = new Flag(
+            key: 'rollout-flag',
+            version: 1,
+            type: 'Boolean',
+            enabled: true,
+            variations: [new Variation('on', true), new Variation('off', false)],
+            rules: [],
+            fallthrough: new ServeConfig('Rollout', null, 'userId', '', [
+                new WeightedVariation('on', 50),
+                new WeightedVariation('off', 50),
+            ]),
+            offVariation: 'off',
+        );
+
+        for ($i = 0; $i < 50; $i++) {
+            $uid = "user-$i";
+            $detail = $this->evaluator->evaluate($emptySaltFlag, ['user_id' => $uid], []);
+            $expected = Bucketing::bucket('', $uid) < 50 ? 'on' : 'off';
+            $this->assertSame($expected, $detail->variationKey, "empty-salt user $uid");
+        }
     }
 }
