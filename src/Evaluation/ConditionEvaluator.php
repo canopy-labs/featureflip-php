@@ -41,7 +41,11 @@ final class ConditionEvaluator
             return $condition->negate ? !$result : $result;
         }
 
-        $attributeValue = (string) $raw;
+        // PHP casts bool true → "1" and false → "" via (string), which causes
+        // `true Equals ["1"]` to spuriously match — diverging from the engine,
+        // which treats booleans as non-numeric and does not coerce them to "1".
+        // Use canonical "true"/"false" strings instead (#1477).
+        $attributeValue = is_bool($raw) ? ($raw ? 'true' : 'false') : (string) $raw;
         $result = $this->evaluateOperator($condition->operator, $attributeValue, $condition->values);
 
         return $condition->negate ? !$result : $result;

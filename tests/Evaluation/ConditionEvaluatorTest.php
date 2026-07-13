@@ -344,21 +344,22 @@ final class ConditionEvaluatorTest extends TestCase
 
     public function testBooleanIsExcludedFromNumericCoercion(): void
     {
-        // CRITICAL: a numeric coercion must NOT make bool true match ["1"].
-        // is_int(true)/is_float(true) are both false in PHP, so bool falls
-        // through to the string path. (string) true === "1" in PHP, so the
-        // string path compares "1" vs "1" -> MATCH for equals ["1"].
-        $this->assertNumericCoercion(true, true, 'equals', ['1']);
+        // CRITICAL: booleans must NOT match numeric string "1" via Equals (#1477).
+        // PHP formerly cast bool true → (string) "1", which caused `true Equals
+        // ["1"]` to match — diverging from the engine (which treats booleans as
+        // non-numeric). Fixed: booleans are now serialised as "true"/"false"
+        // before operator evaluation, so the engine result is preserved.
+        $this->assertNumericCoercion(false, true, 'equals', ['1']);
+        $this->assertNumericCoercion(false, false, 'equals', ['']);
 
-        // ...but it must NOT match ["1.0"] (string "1" vs "1.0"). If the bool
-        // were wrongly numeric-coerced, 1.0 == 1.0 would WRONGLY match here.
+        // ...still must NOT match ["1.0"]. The numeric-coercion path is
+        // excluded for booleans (is_int/is_float are both false for bool).
         $this->assertNumericCoercion(false, true, 'equals', ['1.0']);
 
-        // true equals ["true"]: (string) true === "1" in PHP, so the string
-        // path compares "1" vs "true" -> NO match. This differs from other
-        // languages because PHP stringifies bool true as "1", not "true". We
-        // assert the ACTUAL current string-path behavior and do not change it.
-        $this->assertNumericCoercion(false, true, 'equals', ['true']);
+        // true equals ["true"] now matches because bool true → "true" string.
+        $this->assertNumericCoercion(true, true, 'equals', ['true']);
+        // false equals ["false"].
+        $this->assertNumericCoercion(true, false, 'equals', ['false']);
     }
 
     public function testStringAttributeKeepsLexicalPath(): void
