@@ -11,6 +11,14 @@ use Psr\SimpleCache\CacheInterface;
 
 final class Config
 {
+    /**
+     * @param array<mixed> $inspectors Evaluation inspectors — callables invoked
+     *                                 synchronously with an {@see EvaluationEvent}
+     *                                 on every variation call. Honored when the
+     *                                 shared core is first created for an SDK key
+     *                                 (like every other option). Non-callable
+     *                                 entries are dropped at construction.
+     */
     public function __construct(
         public readonly string $baseUrl = 'https://eval.featureflip.io',
         public readonly int $pollInterval = 30,
@@ -21,5 +29,6 @@ final class Config
         public readonly ?ClientInterface $httpClient = null,
         public readonly ?RequestFactoryInterface $requestFactory = null,
         public readonly ?StreamFactoryInterface $streamFactory = null,
+        public readonly array $inspectors = [],
     ) {}
 }

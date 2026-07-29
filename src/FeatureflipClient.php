@@ -40,10 +40,15 @@ final class FeatureflipClient
 
     /**
      * @param array<string, mixed> $flags
+     * @param array<mixed>         $inspectors Evaluation inspectors, same shape as
+     *                                         {@see Config::$inspectors}. Test-stub
+     *                                         clients notify them exactly like live
+     *                                         ones, so a unit test can assert on the
+     *                                         events its inspector receives.
      */
-    public static function forTesting(array $flags): self
+    public static function forTesting(array $flags, array $inspectors = []): self
     {
-        return new self(SharedFeatureflipCore::createForTesting($flags));
+        return new self(SharedFeatureflipCore::createForTesting($flags, $inspectors));
     }
 
     /**
@@ -58,12 +63,23 @@ final class FeatureflipClient
     }
 
     /**
+     * Every public variation accessor below owns its own inspector
+     * notification: it evaluates once, applies its type guard, then notifies
+     * once with the guarded value. No accessor delegates to another, so an
+     * evaluation produces exactly one event — never zero, never two. An
+     * unexpected evaluator error fails safe inside evaluateFlag() to an ERROR
+     * detail carrying the default, so even a throwing evaluation still emits
+     * exactly one (ERROR) event.
+     *
      * @param array<string, mixed> $context
      */
     public function boolVariation(string $key, array $context, bool $default): bool
     {
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        return is_bool($detail->value) ? $detail->value : $default;
+        $value = is_bool($detail->value) ? $detail->value : $default;
+        $this->notifyInspectors($key, $context, $detail, $value);
+
+        return $value;
     }
 
     /**
@@ -72,7 +88,10 @@ final class FeatureflipClient
     public function stringVariation(string $key, array $context, string $default): string
     {
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        return is_string($detail->value) ? $detail->value : $default;
+        $value = is_string($detail->value) ? $detail->value : $default;
+        $this->notifyInspectors($key, $context, $detail, $value);
+
+        return $value;
     }
 
     /**
@@ -81,7 +100,10 @@ final class FeatureflipClient
     public function numberVariation(string $key, array $context, int|float $default): int|float
     {
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        return is_int($detail->value) || is_float($detail->value) ? $detail->value : $default;
+        $value = is_int($detail->value) || is_float($detail->value) ? $detail->value : $default;
+        $this->notifyInspectors($key, $context, $detail, $value);
+
+        return $value;
     }
 
     /**
@@ -92,7 +114,10 @@ final class FeatureflipClient
     public function jsonVariation(string $key, array $context, array $default): array
     {
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        return is_array($detail->value) ? $detail->value : $default;
+        $value = is_array($detail->value) ? $detail->value : $default;
+        $this->notifyInspectors($key, $context, $detail, $value);
+
+        return $value;
     }
 
     /**
@@ -100,7 +125,28 @@ final class FeatureflipClient
      */
     public function variationDetail(string $key, array $context, mixed $default): EvaluationDetail
     {
-        return $this->core->evaluateFlag($key, $context, $default);
+        $detail = $this->core->evaluateFlag($key, $context, $default);
+        // No type guard here — the caller gets the detail verbatim, so the
+        // event reports the detail's own value.
+        $this->notifyInspectors($key, $context, $detail, $detail->value);
+
+        return $detail;
+    }
+
+    /**
+     * Notify inspectors for one completed variation call, unless this handle is
+     * already closed — a closed client evaluates as before but emits no
+     * inspector events (matching the Python and Ruby SDKs).
+     *
+     * @param array<string, mixed> $context
+     */
+    private function notifyInspectors(string $key, array $context, EvaluationDetail $detail, mixed $value): void
+    {
+        if ($this->closed) {
+            return;
+        }
+
+        $this->core->notifyInspectors($key, $context, $detail, $value);
     }
 
     /**

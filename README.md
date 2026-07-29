@@ -123,6 +123,46 @@ $client->identify(['user_id' => '123', 'email' => 'user@example.com', 'plan' => 
 $client->flush();
 ```
 
+## Evaluation Inspectors
+
+Register callables on the config to observe every evaluation in-process — useful
+for piping exposures into your own analytics tooling. Each inspector is invoked
+synchronously, exactly once per variation call, on every exit path — including
+`FLAG_NOT_FOUND` and the evaluator's own `ERROR` reason.
+
+```php
+use Featureflip\Config;
+use Featureflip\EvaluationEvent;
+
+$config = new Config(
+    cache: $psrCache,
+    httpClient: $psrHttpClient,
+    requestFactory: $psrRequestFactory,
+    streamFactory: $psrStreamFactory,
+    inspectors: [
+        function (EvaluationEvent $event) use ($analytics): void {
+            $analytics->capture('feature_flag_called', [
+                'flagKey' => $event->flagKey,
+                'value' => $event->value,
+                'variationKey' => $event->variationKey,
+                'reason' => $event->reason,
+            ]);
+        },
+    ],
+);
+```
+
+`EvaluationEvent` carries `flagKey`, `context` (a copy of the full evaluation
+context), `value` (what the caller receives, default applied), `variationKey`,
+`reason`, `ruleId` (set only for `RULE_MATCH`), `prerequisiteKey` (set only for
+`PREREQUISITE_FAILED`) and an ISO-8601 `timestamp`.
+
+Inspectors are void observers and are isolated from evaluation: a throwing
+inspector cannot change the returned value or stop the other inspectors — the
+failure is written to the PHP error log. Non-callable entries are dropped when
+the client is created. `inspectors` is honored on the first `FeatureflipClient::get()`
+per SDK key, like every other config option.
+
 ## Testing
 
 Use `forTesting()` to create a client with predetermined flag values -- no network calls.
@@ -178,6 +218,7 @@ The class was renamed from `Client` to `FeatureflipClient` and the factory from 
 - **Singleton-by-construction** - Safe with any DI lifetime
 - **Polling updates** - Automatic background flag refresh
 - **Event tracking** - Automatic batching and flushing
+- **Evaluation inspectors** - In-process `onEvaluation` hook for analytics/debugging
 - **Test support** - `forTesting()` factory for deterministic unit tests
 - **PSR-compatible** - Uses PSR-16 (cache), PSR-17/18 (HTTP)
 

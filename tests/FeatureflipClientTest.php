@@ -208,16 +208,12 @@ final class FeatureflipClientTest extends TestCase
         // Build a SharedFeatureflipCore with the custom store via reflection
         $coreRef = new \ReflectionClass(SharedFeatureflipCore::class);
         $coreCtor = $coreRef->getConstructor();
-        $coreCtor->setAccessible(true);
-
         $core = $coreRef->newInstanceWithoutConstructor();
         $coreCtor->invoke($core, $store, null, null, null);
 
         // Build a FeatureflipClient handle wrapping this core
         $clientRef = new \ReflectionClass(FeatureflipClient::class);
         $clientCtor = $clientRef->getConstructor();
-        $clientCtor->setAccessible(true);
-
         $client = $clientRef->newInstanceWithoutConstructor();
         $clientCtor->invoke($client, $core);
 
