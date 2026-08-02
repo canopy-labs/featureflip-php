@@ -10,7 +10,12 @@ use Psr\Http\Message\StreamFactoryInterface;
 
 class HttpClient
 {
-    private const VERSION = '0.1.0';
+    /**
+     * Reported in the User-Agent. composer.json carries no version (Packagist
+     * reads git tags), so this is maintained by hand and pinned to CHANGELOG.md
+     * by HttpClientVersionTest. Bump both together.
+     */
+    private const VERSION = '2.4.1';
 
     public function __construct(
         private readonly ClientInterface $client,
