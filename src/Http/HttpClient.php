@@ -15,7 +15,7 @@ class HttpClient
      * reads git tags), so this is maintained by hand and pinned to CHANGELOG.md
      * by HttpClientVersionTest. Bump both together.
      */
-    private const VERSION = '2.4.1';
+    private const VERSION = '2.4.2';
 
     public function __construct(
         private readonly ClientInterface $client,
