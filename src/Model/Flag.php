@@ -36,12 +36,12 @@ final class Flag
     public static function fromArray(array $data): self
     {
         return new self(
-            key: $data['key'],
+            key: RequiredField::string($data, 'key', 'flag'),
             version: $data['version'] ?? 0,
             type: $data['type'] ?? 'boolean',
             enabled: $data['enabled'] ?? false,
             variations: array_map(
-                fn(array $v) => new Variation($v['key'], $v['value'] ?? null),
+                fn(array $v) => new Variation(RequiredField::string($v, 'key', 'flag variation'), $v['value'] ?? null),
                 $data['variations'] ?? [],
             ),
             rules: array_map(

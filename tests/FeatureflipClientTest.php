@@ -12,6 +12,7 @@ use Featureflip\Store\FlagStore;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Psr7\HttpFactory;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\NullLogger;
 use Symfony\Component\Cache\Adapter\ArrayAdapter;
 use Symfony\Component\Cache\Psr16Cache;
 
@@ -33,6 +34,10 @@ final class FeatureflipClientTest extends TestCase
             httpClient: new GuzzleClient(['timeout' => 1, 'connect_timeout' => 1]),
             requestFactory: $httpFactory,
             streamFactory: $httpFactory,
+            // These tests point at a deliberately dead port to exercise the
+            // singleton lifecycle, not the network. Silence the default logger
+            // so the real signal isn't buried in expected connection failures.
+            logger: new NullLogger(),
         );
     }
 

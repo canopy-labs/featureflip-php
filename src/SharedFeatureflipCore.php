@@ -8,7 +8,10 @@ use Featureflip\DataSource\Poller;
 use Featureflip\Evaluation\Evaluator;
 use Featureflip\Events\{Event, EventProcessor};
 use Featureflip\Http\HttpClient;
+use Featureflip\Logging\ErrorLogLogger;
+use Featureflip\Logging\RedactingLogger;
 use Featureflip\Store\FlagStore;
+use Psr\Log\LoggerInterface;
 
 /**
  * @internal Not part of the public API — shared resource core with refcounted lifecycle.
@@ -19,6 +22,13 @@ final class SharedFeatureflipCore
     private ?FlagStore $store;
     private ?EventProcessor $eventProcessor;
     private ?Poller $poller;
+    private LoggerInterface $logger;
+
+    /**
+     * Earliest time this process should look at the shared backoff marker
+     * again. In-memory on purpose — see refreshIfStale().
+     */
+    private ?int $nextRefreshCheckAt = null;
 
     /** @var array<string, mixed>|null For test mode */
     private ?array $testFlags;
@@ -40,7 +50,9 @@ final class SharedFeatureflipCore
         ?Poller $poller,
         ?array $testFlags,
         array $inspectors = [],
+        ?LoggerInterface $logger = null,
     ) {
+        $this->logger = $logger ?? new ErrorLogLogger();
         $this->evaluator = new Evaluator();
         $this->store = $store;
         $this->eventProcessor = $eventProcessor;
@@ -62,41 +74,42 @@ final class SharedFeatureflipCore
             throw new \InvalidArgumentException('streamFactory is required');
         }
 
+        // Everything the SDK logs goes through the redactor, including the
+        // default error-log sink: failure messages quote exceptions raised by
+        // the caller's own HTTP client, which may have the Authorization header
+        // in them (#2266).
+        $logger = new RedactingLogger($config->logger ?? new ErrorLogLogger(), $sdkKey);
+
         $httpClient = new HttpClient(
             $config->httpClient,
             $config->requestFactory,
             $streamFactory,
             $sdkKey,
             rtrim($config->baseUrl, '/'),
+            $logger,
         );
 
         $store = new FlagStore(
             $config->cache,
             md5($sdkKey),
             $config->pollInterval,
+            $logger,
         );
 
-        $poller = new Poller($httpClient, $store);
-        $eventProcessor = new EventProcessor($httpClient, $config->flushBatchSize);
+        $poller = new Poller($httpClient, $store, $logger);
+        $eventProcessor = new EventProcessor(
+            $httpClient,
+            $config->flushBatchSize,
+            $logger,
+            $config->flushInterval,
+        );
 
-        $instance = new self($store, $eventProcessor, $poller, null, $config->inspectors);
+        $instance = new self($store, $eventProcessor, $poller, null, $config->inspectors, $logger);
 
-        // Fetch flags if cache is expired
-        if ($store->isExpired()) {
-            try {
-                $poller->fetch();
-            } catch (\Throwable) {
-                // Gracefully degrade — use stale cache or defaults
-            }
-        }
+        $instance->refreshIfStale();
 
         // Register shutdown function to flush events async
-        register_shutdown_function(function () use ($instance): void {
-            if (function_exists('fastcgi_finish_request')) {
-                fastcgi_finish_request();
-            }
-            $instance->shutdown();
-        });
+        register_shutdown_function($instance->shutdown(...));
 
         return $instance;
     }
@@ -110,6 +123,138 @@ final class SharedFeatureflipCore
     public static function createForTesting(array $flags, array $inspectors = []): self
     {
         return new self(null, null, null, $flags, $inspectors);
+    }
+
+    /**
+     * Fetch a new configuration when the held one is due a refresh.
+     *
+     * Called at construction and again from the evaluation path. Under PHP-FPM
+     * the two are the same thing — every request builds a core — but a
+     * persistent worker (Octane, RoadRunner, FrankenPHP, Swoole) builds one at
+     * boot and keeps it for thousands of requests, so a construction-only check
+     * meant flags froze at boot until the process restarted (#2260).
+     *
+     * Cheap on the hot path: when the configuration is fresh this is one
+     * integer comparison. When it is stale exactly one caller pays the fetch
+     * and the rest read the refreshed store; when the API is unreachable the
+     * backoff caps attempts at one per poll interval across every worker,
+     * rather than one per evaluation.
+     */
+    private function refreshIfStale(): void
+    {
+        if ($this->store === null || $this->poller === null) {
+            return;
+        }
+
+        // Fresh configuration: one integer comparison against an in-memory
+        // timestamp, and nothing else. This is the overwhelmingly common case
+        // and it must never touch the cache.
+        if (!$this->store->isExpired()) {
+            return;
+        }
+
+        // Stale, and a recent failure is still backing off. The marker lives in
+        // the shared cache so the backoff holds across workers — but reading it
+        // is a round-trip to Redis or the filesystem, and a stale store stays
+        // stale for the whole outage, so consulting it per evaluation would
+        // turn every flag check into a network call for as long as the
+        // evaluation API is down. Remember the answer in-process and re-ask at
+        // most once a second.
+        $now = time();
+        if ($this->nextRefreshCheckAt !== null && $now < $this->nextRefreshCheckAt) {
+            return;
+        }
+
+        if ($this->store->isRefreshBackedOff()) {
+            $this->nextRefreshCheckAt = $now + 1;
+
+            return;
+        }
+
+        // Claim the attempt BEFORE going near the network. The fetch runs
+        // inline on the caller's thread, and the caller's own PSR-18 client may
+        // evaluate a flag itself — a Guzzle middleware gating a retry, say. The
+        // re-entrant call would otherwise find the same stale store and an
+        // unclaimed slot, and recurse until the process dies.
+        $this->nextRefreshCheckAt = $now + 1;
+
+        try {
+            $this->poller->fetch();
+
+            // Release the claim only if a fresh snapshot actually landed. The
+            // poller declines to publish a response that carries no usable
+            // flags (#2258), which leaves the store stale — releasing here
+            // would make the next evaluation retry immediately, and the one
+            // after that, for as long as the evaluation API kept answering.
+            if (!$this->store->isExpired()) {
+                $this->nextRefreshCheckAt = null;
+            }
+        } catch (\Throwable $e) {
+            // Degrade to the last known good configuration, which outlives the
+            // poll interval. Crucially this is REPORTED: the old bare
+            // `catch (\Throwable)` bound no variable, so it could not log even
+            // in principle, and a wrong SDK key or an unreachable API produced
+            // total silence while every flag quietly served its caller
+            // default (#2258).
+            $this->store->recordFailedRefresh();
+            $this->warn(
+                'flag configuration fetch failed: ' . $e->getMessage()
+                . ($this->store->isEmpty()
+                    ? ' - no cached configuration is available, so flags will serve their caller defaults'
+                    : ' - serving the last known good configuration'),
+            );
+        }
+    }
+
+    /**
+     * Report without ever failing the caller.
+     *
+     * This runs on the evaluation path now, and a PSR-3 logger is the host
+     * application's code: Monolog throws `UnexpectedValueException` when its
+     * stream handler cannot open its file — a full disk, a rotated directory,
+     * a permissions change. Letting that out of boolVariation() would put the
+     * SDK straight back into the failure mode #1990 removed.
+     */
+    private function warn(string $message): void
+    {
+        try {
+            $this->logger->warning($message);
+        } catch (\Throwable) {
+            // Nowhere left to report to.
+        }
+    }
+
+    /**
+     * Whether a flag configuration has been loaded.
+     *
+     * "Loaded", not "fresh": a snapshot retained through an evaluation-API
+     * outage is still a configuration, which is exactly what #2258 exists to
+     * provide. A test stub counts as loaded — it has values to serve — which
+     * matches the python SDK's explicit carve-out.
+     */
+    public function isInitialized(): bool
+    {
+        if ($this->testFlags !== null) {
+            return true;
+        }
+
+        return $this->store?->isLoaded() ?? false;
+    }
+
+    /**
+     * Refresh the configuration now if it is due one.
+     *
+     * The evaluation path does this by itself, so calling this is optional. It
+     * exists for persistent workers that would rather the fetch happened
+     * *between* requests than inside one — an Octane tick listener or a
+     * RoadRunner worker loop — so no user's request ever pays for it.
+     *
+     * Honours the poll interval and the failure backoff, exactly as the
+     * automatic path does, which makes it safe to call on a tight tick.
+     */
+    public function refresh(): void
+    {
+        $this->refreshIfStale();
     }
 
     public function acquire(): bool
@@ -136,6 +281,17 @@ final class SharedFeatureflipCore
             return;
         }
         $this->isShutDown = true;
+
+        // Return the response before shipping whatever events are still
+        // queued, so the user never waits on analytics. Deliberately *after*
+        // the guard: it used to run unconditionally on every registered
+        // shutdown handler, so a client that had already been closed still
+        // ended the host application's request as a side effect of the SDK
+        // merely having been constructed (#2260).
+        if ($this->eventProcessor?->queueSize() > 0 && function_exists('fastcgi_finish_request')) {
+            fastcgi_finish_request();
+        }
+
         $this->flush();
     }
 
@@ -166,6 +322,8 @@ final class SharedFeatureflipCore
                 ? new EvaluationDetail($this->testFlags[$key], 'FALLTHROUGH')
                 : new EvaluationDetail($default, 'FLAG_NOT_FOUND');
         }
+
+        $this->refreshIfStale();
 
         $flag = $this->store?->getFlag($key);
         $segments = $this->store?->getSegments() ?? [];

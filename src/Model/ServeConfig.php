@@ -24,7 +24,10 @@ final class ServeConfig
             salt: $data['salt'] ?? null,
             variations: isset($data['variations'])
                 ? array_map(
-                    fn(array $v) => new WeightedVariation($v['key'], $v['weight']),
+                    fn(array $v) => new WeightedVariation(
+                        RequiredField::string($v, 'key', 'weighted variation'),
+                        RequiredField::int($v, 'weight', 'weighted variation'),
+                    ),
                     $data['variations'],
                 )
                 : null,

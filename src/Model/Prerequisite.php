@@ -17,8 +17,8 @@ final class Prerequisite
     public static function fromArray(array $data): self
     {
         return new self(
-            prerequisiteFlagKey: $data['prerequisiteFlagKey'],
-            expectedVariationKey: $data['expectedVariationKey'],
+            prerequisiteFlagKey: RequiredField::string($data, 'prerequisiteFlagKey', 'prerequisite'),
+            expectedVariationKey: RequiredField::string($data, 'expectedVariationKey', 'prerequisite'),
         );
     }
 }

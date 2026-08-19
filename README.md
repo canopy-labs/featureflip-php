@@ -41,19 +41,114 @@ use Featureflip\Config;
 $config = new Config(
     baseUrl: 'https://eval.featureflip.io',  // Evaluation API URL (default)
     pollInterval: 30,                         // Polling interval in seconds
-    flushInterval: 30,                        // Event flush interval in seconds
+    flushInterval: 30,                        // Ship queued events at least this often
     flushBatchSize: 100,                      // Events per batch
-    initTimeout: 10,                          // Max seconds to wait for initialization
     cache: $psrCache,                         // PSR-16 CacheInterface
     httpClient: $psrHttpClient,               // PSR-18 ClientInterface
     requestFactory: $psrRequestFactory,       // PSR-17 RequestFactoryInterface
     streamFactory: $psrStreamFactory,         // PSR-17 StreamFactoryInterface
+    logger: $psrLogger,                       // PSR-3 LoggerInterface (optional)
 );
 
 $client = FeatureflipClient::get('your-sdk-key', $config);
 ```
 
-The SDK key can also be set via the `FEATUREFLIP_SDK_KEY` environment variable.
+The SDK key can also be supplied through the `FEATUREFLIP_SDK_KEY` environment variable — pass an empty string to `get()` and it is read from there. Passing a key explicitly always wins.
+
+### Timeouts
+
+The SDK has no timeout option, and cannot have one: it evaluates through the
+PSR-18 client *you* supply, and PSR-18's `sendRequest()` exposes no timeout or
+cancellation hook, so the SDK cannot bound a call it did not originate. Set the
+timeout on the client you inject:
+
+```php
+new GuzzleHttp\Client(['timeout' => 5, 'connect_timeout' => 2])
+```
+
+This matters more than it looks: the configuration fetch runs synchronously on
+the calling thread, so a client with no timeout (Guzzle's default is `0`, i.e.
+none) can block a request indefinitely against an evaluation API that accepts
+the connection and then stalls.
+
+### Logging
+
+The SDK reports anything that stops it loading a flag configuration — an
+unreachable evaluation API, a rejected SDK key, a flag it had to skip. Pass your
+application's PSR-3 logger to get those where you actually read them:
+
+```php
+$config = new Config(
+    logger: $monolog,
+    // ...
+);
+```
+
+Omit it and the SDK writes to PHP's error log instead — never nowhere, because a
+configuration the SDK cannot load is indistinguishable from an empty one, and
+every flag then serves its caller default. A repeated failure is reported once
+per poll interval rather than once per request, so an outage does not flood the
+log.
+
+### Long-running workers
+
+Under PHP-FPM every request builds a fresh client, so the SDK refreshes its
+configuration and ships its events naturally. Under a persistent worker —
+Laravel Octane, RoadRunner, FrankenPHP, Swoole — the client lives for thousands
+of requests instead, and the SDK adapts to that on its own: the configuration
+refreshes on the evaluation path once the poll interval has elapsed, and queued
+events drain when they reach `flushBatchSize` or when `flushInterval` passes,
+whichever comes first.
+
+Nothing is required of you. If you would rather the refresh happened *between*
+requests than inside one, call `refresh()` from your worker's tick hook:
+
+```php
+// Laravel Octane
+Octane::tick('featureflip', fn () => $client->refresh())->seconds(10);
+```
+
+`refresh()` honours the poll interval and the failure backoff, so a tick that
+finds nothing due does no work. With `pollInterval: 0` every tick is due, so
+pick an interval that matches how quickly you need changes to land.
+
+### Readiness
+
+`isInitialized()` tells you whether the SDK holds a flag configuration at all:
+
+```php
+if (!$client->isInitialized()) {
+    // Nothing was ever loaded — every evaluation is returning the default you
+    // pass. Usually a rejected SDK key, or an unreachable evaluation API with
+    // no cached snapshot to fall back on.
+}
+```
+
+It answers "was anything ever loaded", not "is it current". A configuration
+retained through an outage still counts — the SDK is out of date, not
+uninitialised. A closed handle always reports `false`.
+
+### Resilience
+
+Once a configuration has been fetched successfully it is cached and **kept**.
+The poll interval controls when the SDK tries to refresh, not how long the
+cached copy survives — so if the evaluation API is unreachable, flags keep
+serving their last known good values rather than falling back to the defaults
+passed at each call site.
+
+Alongside that:
+
+- A refresh that fails backs off for one poll interval instead of re-dialling on
+  every request.
+- A single malformed flag is skipped and logged rather than discarding the whole
+  configuration.
+- A response that arrives successfully but carries no usable flags is refused,
+  so a degraded response cannot empty a working configuration.
+
+Retention is best-effort, as caching always is: an eviction-based backend
+(Redis, Memcached) may still drop the entry under memory pressure, and a cache
+configured with its own default lifetime will expire it on that schedule. Either
+case degrades to an ordinary cold start.
 
 ### PSR Dependencies
 
@@ -80,6 +175,10 @@ $h2 = FeatureflipClient::get('sdk-key-123'); // Same core, no config needed
 $h1->close(); // Refcount decremented, but core stays alive
 $h2->close(); // Last handle — core shuts down
 ```
+
+A closed handle is **inert**: variation calls return the default you pass,
+`track()`/`identify()`/`flush()` do nothing, and no inspectors fire. Closing one
+handle never affects a sibling still holding the same core.
 
 ## Evaluation
 
@@ -182,12 +281,19 @@ $client->boolVariation('unknown', [], false);          // false (default)
 
 ```php
 // In a service provider
-$this->app->singleton(FeatureflipClient::class, function () {
+$this->app->singleton(FeatureflipClient::class, function ($app) {
+    $psr17 = new \GuzzleHttp\Psr7\HttpFactory();
+
     return FeatureflipClient::get(config('services.featureflip.sdk_key'), new Config(
-        cache: app(CacheInterface::class),
-        httpClient: app(ClientInterface::class),
-        requestFactory: app(RequestFactoryInterface::class),
-        streamFactory: app(StreamFactoryInterface::class),
+        // Illuminate's cache repository implements PSR-16, but the interface
+        // itself is not bound in the container — resolve the concrete store.
+        cache: $app->make('cache.store'),
+        // Laravel binds no PSR-18 client; construct one and give it a timeout,
+        // since the SDK fetches configuration on the calling thread.
+        httpClient: new \GuzzleHttp\Client(['timeout' => 5, 'connect_timeout' => 2]),
+        requestFactory: $psr17,
+        streamFactory: $psr17,
+        logger: $app->make(\Psr\Log\LoggerInterface::class),
     ));
 });
 
@@ -199,6 +305,30 @@ public function index(FeatureflipClient $client)
 ```
 
 Even if accidentally registered as scoped or transient, the factory ensures all handles share one underlying connection.
+
+## Migrating from 2.x
+
+Two breaking changes.
+
+**`initTimeout` is gone.** It never did anything. Set the timeout on the PSR-18
+client you inject instead — that is the only place it can live:
+
+```php
+// Before (2.x) — had no effect
+new Config(initTimeout: 5, httpClient: new GuzzleHttp\Client(), ...);
+
+// After (3.x)
+new Config(httpClient: new GuzzleHttp\Client(['timeout' => 5]), ...);
+```
+
+If you were passing `initTimeout`, you had no timeout at all; Guzzle's default
+is `0`, meaning none. Setting one is the actual fix.
+
+**A closed handle is now inert.** Variation calls return the default you pass,
+`variationDetail()` reports reason `ERROR`, and `track()`/`identify()`/`flush()`
+do nothing. Previously they carried on as if the handle were open. If you relied
+on evaluating after `close()`, keep the handle open — or take a fresh one with
+`FeatureflipClient::get($sdkKey)`, which is free while any handle is alive.
 
 ## Migrating from 1.x
 
@@ -216,11 +346,14 @@ The class was renamed from `Client` to `FeatureflipClient` and the factory from 
 
 - **Local evaluation** - Near-zero latency after initialization
 - **Singleton-by-construction** - Safe with any DI lifetime
-- **Polling updates** - Automatic background flag refresh
+- **Refreshes on demand** - Re-fetches when the poll interval lapses; no background thread, because PHP has none
 - **Event tracking** - Automatic batching and flushing
 - **Evaluation inspectors** - In-process `onEvaluation` hook for analytics/debugging
 - **Test support** - `forTesting()` factory for deterministic unit tests
-- **PSR-compatible** - Uses PSR-16 (cache), PSR-17/18 (HTTP)
+- **Resilient** - Serves last-known-good configuration through an evaluation API outage
+- **Worker-aware** - Refreshes flags and drains events under Octane/RoadRunner/FrankenPHP/Swoole
+- **Introspectable** - `isInitialized()` reports whether a configuration was ever loaded
+- **PSR-compatible** - Uses PSR-16 (cache), PSR-17/18 (HTTP), PSR-3 (logging)
 
 ## Requirements
 

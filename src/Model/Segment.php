@@ -17,7 +17,7 @@ final class Segment
     public static function fromArray(array $data): self
     {
         return new self(
-            key: $data['key'],
+            key: RequiredField::string($data, 'key', 'segment'),
             version: $data['version'] ?? 0,
             conditions: array_map(
                 fn(array $c) => Condition::fromArray($c),

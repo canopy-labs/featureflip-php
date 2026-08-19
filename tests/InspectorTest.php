@@ -706,14 +706,18 @@ final class InspectorTest extends TestCase
 
         $client->close();
 
-        // Evaluation still returns the same value — only the notification is
-        // suppressed (matching the Python and Ruby SDKs).
-        $this->assertTrue($client->boolVariation('flag-on', ['user_id' => 'bob'], false));
-        $this->assertFalse($client->boolVariation('flag-off', ['user_id' => 'bob'], true));
-        $this->assertSame('15', $client->stringVariation('flag-string-15', ['user_id' => 'bob'], 'x'));
+        // A closed handle is inert: every accessor returns the caller's default
+        // and none of them notify. The previous behaviour — evaluate normally,
+        // suppress only the notification — was justified here as "matching the
+        // Python and Ruby SDKs", which was never true: both guard every
+        // accessor, and Python likewise reports ERROR from variation_detail
+        // (#2267).
+        $this->assertFalse($client->boolVariation('flag-on', ['user_id' => 'bob'], false));
+        $this->assertTrue($client->boolVariation('flag-off', ['user_id' => 'bob'], true));
+        $this->assertSame('x', $client->stringVariation('flag-string-15', ['user_id' => 'bob'], 'x'));
         $this->assertSame(0, $client->numberVariation('flag-string-15', ['user_id' => 'bob'], 0));
         $this->assertSame([], $client->jsonVariation('flag-on', ['user_id' => 'bob'], []));
-        $this->assertSame('FALLTHROUGH', $client->variationDetail('flag-on', ['user_id' => 'bob'], false)->reason);
+        $this->assertSame('ERROR', $client->variationDetail('flag-on', ['user_id' => 'bob'], false)->reason);
 
         $this->assertCount(1, $events, 'no accessor may notify once the client is closed');
     }
@@ -725,7 +729,10 @@ final class InspectorTest extends TestCase
 
         $client->close();
 
-        $this->assertTrue($client->boolVariation('dark-mode', ['user_id' => 'bob'], false));
+        $this->assertFalse(
+            $client->boolVariation('dark-mode', ['user_id' => 'bob'], false),
+            'A closed test-stub handle is inert too — the stub is not a loophole',
+        );
         $this->assertCount(0, $events);
     }
 

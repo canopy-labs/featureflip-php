@@ -7,15 +7,23 @@ namespace Featureflip\Http;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Featureflip\Logging\ErrorLogLogger;
+use Psr\Log\LoggerInterface;
 
 class HttpClient
 {
     /**
      * Reported in the User-Agent. composer.json carries no version (Packagist
-     * reads git tags), so this is maintained by hand and pinned to CHANGELOG.md
-     * by HttpClientVersionTest. Bump both together.
+     * reads git tags), so this is maintained by hand and held equal to
+     * CHANGELOG.md's newest heading by tools/check-sdk-versions (CI workflow
+     * sdk-version-consistency.yml). Bump both together.
      */
-    private const VERSION = '2.4.2';
+    private const VERSION = '3.0.0';
+
+    private LoggerInterface $logger;
+
+    /** Message from the most recent failed post, for the caller to report. */
+    private ?string $lastError = null;
 
     public function __construct(
         private readonly ClientInterface $client,
@@ -23,7 +31,10 @@ class HttpClient
         private readonly StreamFactoryInterface $streamFactory,
         private readonly string $sdkKey,
         private readonly string $baseUrl,
-    ) {}
+        ?LoggerInterface $logger = null,
+    ) {
+        $this->logger = $logger ?? new ErrorLogLogger();
+    }
 
     /**
      * @return array<string, mixed>
@@ -46,9 +57,20 @@ class HttpClient
     }
 
     /**
+     * The message from the most recent failed {@see post()}, if any.
+     */
+    public function lastError(): ?string
+    {
+        return $this->lastError;
+    }
+
+    /**
+     * Best-effort delivery. Returns false when the payload could not be sent,
+     * so the caller can report once per flush rather than once per batch.
+     *
      * @param array<string, mixed> $body
      */
-    public function post(string $path, array $body): void
+    public function post(string $path, array $body): bool
     {
         try {
             $json = json_encode($body, JSON_THROW_ON_ERROR);
@@ -59,8 +81,18 @@ class HttpClient
                 ->withBody($this->streamFactory->createStream($json));
 
             $this->client->sendRequest($request);
-        } catch (\Throwable) {
-            // Best-effort for events, don't throw
+
+            return true;
+        } catch (\Throwable $e) {
+            // Event delivery stays best-effort — analytics must never break an
+            // evaluation — but it is no longer silent. Dropped events used to
+            // leave no trace at all, so a customer's analytics could be wholly
+            // absent with nothing to explain it (#2258). Reporting is left to
+            // the caller so one failed flush is one log line, however many
+            // batches it was chunked into.
+            $this->lastError = $e->getMessage();
+
+            return false;
         }
     }
 }
