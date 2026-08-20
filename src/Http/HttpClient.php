@@ -18,7 +18,7 @@ class HttpClient
      * CHANGELOG.md's newest heading by tools/check-sdk-versions (CI workflow
      * sdk-version-consistency.yml). Bump both together.
      */
-    private const VERSION = '3.0.0';
+    private const VERSION = '3.0.1';
 
     private LoggerInterface $logger;
 

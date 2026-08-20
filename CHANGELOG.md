@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.1 — 2026-08-20
+
+### Changed
+
+- A type-mismatched read returns the caller's default and reports `'ERROR'`, instead of returning it under the evaluator's *success* reason, which left callers no signal at all. Reading a String flag through a number accessor, say, is now detectable rather than silent. Matching reads and the generic/JSON accessors are unchanged. ([#2281](https://github.com/canopy-labs/featureflip/issues/2281))
 ## 3.0.0 — 2026-08-19
 
 ### Removed

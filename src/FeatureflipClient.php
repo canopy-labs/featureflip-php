@@ -124,7 +124,7 @@ final class FeatureflipClient
         }
 
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        $value = is_bool($detail->value) ? $detail->value : $default;
+        [$detail, $value] = $this->narrow($detail, is_bool(...), $default);
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -140,7 +140,7 @@ final class FeatureflipClient
         }
 
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        $value = is_string($detail->value) ? $detail->value : $default;
+        [$detail, $value] = $this->narrow($detail, is_string(...), $default);
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -156,7 +156,11 @@ final class FeatureflipClient
         }
 
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        $value = is_int($detail->value) || is_float($detail->value) ? $detail->value : $default;
+        [$detail, $value] = $this->narrow(
+            $detail,
+            static fn (mixed $v): bool => is_int($v) || is_float($v),
+            $default,
+        );
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -174,7 +178,7 @@ final class FeatureflipClient
         }
 
         $detail = $this->core->evaluateFlag($key, $context, $default);
-        $value = is_array($detail->value) ? $detail->value : $default;
+        [$detail, $value] = $this->narrow($detail, is_array(...), $default);
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -198,6 +202,43 @@ final class FeatureflipClient
         $this->notifyInspectors($key, $context, $detail, $detail->value);
 
         return $detail;
+    }
+
+    /**
+     * Narrows a served value to the type the calling accessor requires.
+     *
+     * On a mismatch the caller's default is substituted AND the reason becomes
+     * ERROR, so a type-mismatched read is detectable rather than looking like a
+     * healthy serve (#2281). Substituting the value alone -- the prior behaviour --
+     * meant a caller reading a string flag through boolVariation() silently got
+     * their default back under FALLTHROUGH.
+     *
+     * EvaluationDetail is readonly, so the mismatch case rebuilds it. The
+     * variation/rule/prerequisite keys are preserved: the flag config is healthy,
+     * the caller simply asked for the wrong type.
+     *
+     * variationDetail() deliberately does not use this -- it takes a mixed default
+     * and so has no requested type to check against.
+     *
+     * @param callable(mixed): bool $matches
+     * @return array{EvaluationDetail, mixed}
+     */
+    private function narrow(EvaluationDetail $detail, callable $matches, mixed $default): array
+    {
+        if ($matches($detail->value)) {
+            return [$detail, $detail->value];
+        }
+
+        return [
+            new EvaluationDetail(
+                $default,
+                'ERROR',
+                $detail->ruleId,
+                $detail->variationKey,
+                $detail->prerequisiteKey,
+            ),
+            $default,
+        ];
     }
 
     /**

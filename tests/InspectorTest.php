@@ -465,8 +465,11 @@ final class InspectorTest extends TestCase
         $this->assertCount(1, $events);
         $this->assertSame(0, $events[0]->value, 'event value must be what the caller received');
         $this->assertNotSame('15', $events[0]->value);
-        // The rest of the detail still describes the real evaluation.
-        $this->assertSame('FALLTHROUGH', $events[0]->reason);
+        // The reason reports the mismatch rather than a healthy serve, so callers
+        // can detect it (#2281). See TypeMismatchTest.
+        $this->assertSame('ERROR', $events[0]->reason);
+        // The rest of the detail still describes the real evaluation — the flag
+        // config is healthy, the caller just asked for the wrong type.
         $this->assertSame('fifteen', $events[0]->variationKey);
     }
 
@@ -505,6 +508,59 @@ final class InspectorTest extends TestCase
         $this->assertSame('15', $returned);
         $this->assertCount(1, $events);
         $this->assertSame('15', $events[0]->value);
+    }
+
+    // --- A type-mismatched read reports ERROR (#2281) ---------------------
+    //
+    // Returning the caller's default was already right; reporting FALLTHROUGH
+    // alongside it was not, because it left callers with no signal that the flag
+    // they read was not the type they asked for.
+
+    public function testBoolVariationOnStringFlagReportsError(): void
+    {
+        $events = [];
+        $client = $this->makeClient([$this->recorder($events)]);
+
+        $client->boolVariation('flag-string-15', ['user_id' => 'bob'], true);
+
+        $this->assertSame('ERROR', $events[0]->reason);
+    }
+
+    public function testJsonVariationOnStringFlagReportsError(): void
+    {
+        $events = [];
+        $client = $this->makeClient([$this->recorder($events)]);
+
+        $client->jsonVariation('flag-string-15', ['user_id' => 'bob'], ['fallback' => true]);
+
+        $this->assertSame('ERROR', $events[0]->reason);
+    }
+
+    public function testMatchingReadKeepsItsRealReason(): void
+    {
+        // Positive control: the guard passing must not touch the reason.
+        $events = [];
+        $client = $this->makeClient([$this->recorder($events)]);
+
+        $this->assertSame('15', $client->stringVariation('flag-string-15', ['user_id' => 'bob'], 'fallback'));
+
+        $this->assertSame('FALLTHROUGH', $events[0]->reason);
+        $this->assertSame('fifteen', $events[0]->variationKey);
+    }
+
+    public function testVariationDetailIsNotTypeChecked(): void
+    {
+        // variationDetail() takes a mixed default, so it has no requested type to
+        // mismatch against and keeps reporting the real reason even though the
+        // caller passed an int default against a string flag.
+        $events = [];
+        $client = $this->makeClient([$this->recorder($events)]);
+
+        $detail = $client->variationDetail('flag-string-15', ['user_id' => 'bob'], 0);
+
+        $this->assertSame('15', $detail->value);
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+        $this->assertSame('FALLTHROUGH', $events[0]->reason);
     }
 
     public function testVariationDetailReportsTheDetailsOwnValue(): void
