@@ -215,7 +215,7 @@ echo $detail->variationKey; // Key of the matched variation
 // Track custom events
 $client->track('checkout-completed', ['user_id' => '123'], ['total' => 99.99]);
 
-// Identify users for segment building
+// Record an identify event for analytics (does not affect flag evaluation)
 $client->identify(['user_id' => '123', 'email' => 'user@example.com', 'plan' => 'pro']);
 
 // Force flush pending events

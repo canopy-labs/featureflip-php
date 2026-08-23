@@ -23,6 +23,41 @@ final class ConditionEvaluatorTest extends TestCase
         $this->assertTrue($this->evaluator->evaluate($condition, ['country' => 'US']));
     }
 
+    /**
+     * Issue #2262: an operator this SDK does not recognise means "I cannot
+     * evaluate this", NOT "this did not match". Inverting that inability with
+     * negate would turn it into a match-everyone — the flag served to 100% of
+     * traffic. The realistic trigger is a new operator shipped server-side
+     * reaching an SDK pinned to an older version. Unrecognised operators fail
+     * CLOSED, before negate is applied.
+     *
+     * Contrast the missing-attribute path, which legitimately returns negate:
+     * absence is a determinate fact about the user, whereas an unrecognised
+     * operator is not a fact about the user at all.
+     */
+    public function testUnknownOperatorDoesNotMatch(): void
+    {
+        $condition = new Condition('country', 'some_future_operator', ['US'], false);
+        $this->assertFalse($this->evaluator->evaluate($condition, ['country' => 'US']));
+    }
+
+    public function testUnknownOperatorNegatedFailsClosed(): void
+    {
+        $condition = new Condition('country', 'some_future_operator', ['US'], true);
+        $this->assertFalse($this->evaluator->evaluate($condition, ['country' => 'US']));
+    }
+
+    /**
+     * The shape that actually rolls a flag out to everyone: a rule whose only
+     * condition negates an operator the SDK cannot evaluate.
+     */
+    public function testUnknownOperatorNegatedDoesNotMatchArbitraryUsers(): void
+    {
+        $condition = new Condition('plan', 'SomeFutureOperator', ['enterprise'], true);
+        $this->assertFalse($this->evaluator->evaluate($condition, ['plan' => 'free']));
+        $this->assertFalse($this->evaluator->evaluate($condition, ['plan' => 'enterprise']));
+    }
+
     public function testEqualsCaseInsensitive(): void
     {
         $condition = new Condition('country', 'equals', ['us'], false);

@@ -19,13 +19,13 @@ final class Event
      */
     public static function evaluation(string $flagKey, array $context, ?string $variationKey): self
     {
-        return new self('Evaluation', [
+        return new self('Evaluation', self::compactPayload([
             'type' => 'Evaluation',
             'flagKey' => $flagKey,
             'userId' => self::userId($context),
             'variation' => $variationKey ?? '',
-            'timestamp' => (new \DateTimeImmutable())->format('c'),
-        ]);
+            'timestamp' => self::nowUtc(),
+        ]));
     }
 
     /**
@@ -34,13 +34,13 @@ final class Event
      */
     public static function custom(string $eventKey, array $context, array $metadata = []): self
     {
-        return new self('Custom', [
+        return new self('Custom', self::compactPayload([
             'type' => 'Custom',
             'flagKey' => $eventKey,
             'userId' => self::userId($context),
-            'timestamp' => (new \DateTimeImmutable())->format('c'),
+            'timestamp' => self::nowUtc(),
             'metadata' => $metadata,
-        ]);
+        ]));
     }
 
     /**
@@ -48,12 +48,17 @@ final class Event
      */
     public static function identify(array $context): self
     {
-        return new self('Identify', [
+        // Strip both identity spellings so the id is carried once, at the top
+        // level, and not duplicated inside the attribute bag.
+        $attributes = array_diff_key($context, array_flip(['user_id', 'userId']));
+
+        return new self('Identify', self::compactPayload([
             'type' => 'Identify',
             'flagKey' => '$identify',
             'userId' => self::userId($context),
-            'timestamp' => (new \DateTimeImmutable())->format('c'),
-        ]);
+            'timestamp' => self::nowUtc(),
+            'metadata' => $attributes,
+        ]));
     }
 
     /**
@@ -85,13 +90,15 @@ final class Event
      *
      * @param array<string, mixed> $context
      */
-    private static function userId(array $context): string
+    private static function userId(array $context): ?string
     {
         $value = $context['user_id'] ?? $context['userId'] ?? null;
 
         // No identifier at all is an ordinary anonymous context, not an error.
+        // Returning null omits the field entirely, matching the other SDKs; a
+        // blank string would claim a present-but-empty identity instead.
         if ($value === null) {
-            return '';
+            return null;
         }
 
         // A backed enum carries a perfectly good identifier on ->value, and is
@@ -115,5 +122,51 @@ final class Event
         );
 
         return '';
+    }
+
+    /**
+     * The current instant as an ISO-8601 string, always in UTC.
+     *
+     * `new \DateTimeImmutable()` with no explicit zone uses the PROCESS default,
+     * so this used to emit whatever `date.timezone` the host's PHP-FPM pool ran
+     * in — the only server SDK not sending UTC. That is not a bucketing bug
+     * (`format('c')` writes an explicit offset, so the instant is unambiguous
+     * and the backend normalises it), but the string is forwarded verbatim to a
+     * customer's own analytics provider under the BYO-analytics webhook, and
+     * the offset leaks which timezone the caller's infrastructure runs in
+     * (#2399).
+     *
+     * The format matches what SharedFeatureflipCore already stamps on inspector
+     * events (`Y-m-d\TH:i:s.v\Z`) — this package had the correct spelling in it
+     * the whole time, just not on the path that leaves the process. Milliseconds
+     * and a `Z` suffix also line up with the js SDK.
+     *
+     * Kept as one helper so the three factories cannot drift apart again.
+     */
+    private static function nowUtc(): string
+    {
+        return (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d\TH:i:s.v\Z');
+    }
+
+    /**
+     * `userId` and `metadata` are optional on the wire. Omit them rather than
+     * sending a null or an empty bag — an empty PHP array would encode as a
+     * JSON array (`[]`), which the backend's `Dictionary<string, JsonElement>?`
+     * binder rejects outright.
+     *
+     * @param  array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private static function compactPayload(array $data): array
+    {
+        if (($data['userId'] ?? null) === null) {
+            unset($data['userId']);
+        }
+
+        if (empty($data['metadata'])) {
+            unset($data['metadata']);
+        }
+
+        return $data;
     }
 }

@@ -48,6 +48,15 @@ final class ConditionEvaluator
         $attributeValue = is_bool($raw) ? ($raw ? 'true' : 'false') : (string) $raw;
         $result = $this->evaluateOperator($condition->operator, $attributeValue, $condition->values);
 
+        // Issue #2262: an unrecognised operator fails CLOSED. `!null` is true in
+        // PHP, so without this guard a negated unknown operator would match every
+        // user and roll the flag out to 100% of traffic. The realistic trigger is
+        // a new operator shipped server-side reaching an SDK pinned to an older
+        // version.
+        if ($result === null) {
+            return false;
+        }
+
         return $condition->negate ? !$result : $result;
     }
 
@@ -87,9 +96,16 @@ final class ConditionEvaluator
     }
 
     /**
+     * Applies a single operator to an already-normalized value/target pair.
+     *
+     * Returns null — NOT false — for an operator this SDK does not recognise.
+     * The distinction matters: false means "evaluated, did not match" and is
+     * legitimately inverted by negate, whereas null means "cannot evaluate"
+     * and must never be inverted (#2262).
+     *
      * @param string[] $targets
      */
-    private function evaluateOperator(string $operator, string $value, array $targets): bool
+    private function evaluateOperator(string $operator, string $value, array $targets): ?bool
     {
         // Normalize PascalCase operators from API (e.g. "NotEquals") to snake_case ("not_equals")
         $operator = $this->normalizeOperator($operator);
@@ -130,7 +146,8 @@ final class ConditionEvaluator
             'semver_greater_than_or_equal' => $this->semverMatches($value, $targets, fn(int $c) => $c >= 0),
             'semver_less_than' => $this->semverMatches($value, $targets, fn(int $c) => $c < 0),
             'semver_less_than_or_equal' => $this->semverMatches($value, $targets, fn(int $c) => $c <= 0),
-            default => false,
+            // Unrecognised operator — "cannot evaluate", not "did not match".
+            default => null,
         };
     }
 

@@ -80,8 +80,37 @@ final class GoldenVectorTest extends TestCase
 
     public function testConditionVectors(): void
     {
+        $this->runConditionVectors(self::$vectors['conditionVectors']);
+    }
+
+    /**
+     * Locks the rule that an operator this SDK does not recognise means "cannot
+     * evaluate", NOT "did not match" — so negate must never invert it into a
+     * match-everyone, which would serve the flag to 100% of traffic (#2262).
+     *
+     * Hand-authored vectors, not engine-generated: the generator resolves
+     * operators with Enum.Parse<ConditionOperator>, which throws on an
+     * unrecognised name. PHP carries the operator as a raw string, so unlike the
+     * enum-typed SDKs it can genuinely receive one of these over the wire.
+     */
+    public function testUnknownOperatorVectors(): void
+    {
+        $this->runConditionVectors(self::$vectors['unknownOperatorVectors']);
+    }
+
+    /**
+     * Builds the single-condition flag each vector describes and asserts whether
+     * the "match" variation is served. Shared by the engine-generated condition
+     * vectors and the hand-authored unknown-operator vectors, which have an
+     * identical input shape.
+     *
+     * @param array<int, array<string, mixed>> $vectors
+     */
+    private function runConditionVectors(array $vectors): void
+    {
+        $this->assertNotEmpty($vectors);
         $ev = new Evaluator();
-        foreach (self::$vectors['conditionVectors'] as $v) {
+        foreach ($vectors as $v) {
             $flag = Flag::fromArray([
                 'key'        => 'cond-test',
                 'version'    => 1,
