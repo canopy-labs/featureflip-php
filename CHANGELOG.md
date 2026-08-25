@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.1.1 — 2026-08-24
+
+### Fixed
+
+- A date operand is now trimmed of exactly the whitespace the evaluation engine trims (tab, newline, vertical tab, form feed, carriage return and space), and is rejected outright if it still carries a NUL, another control character, or a non-ASCII whitespace character. Each SDK had been relying on its own language's `trim`, and no two of those cover the same set, so the same operand could match on one SDK and match nothing on another. ([#2468](https://github.com/canopy-labs/featureflip/issues/2468))
+- A digit string of 309 or more characters matches nothing instead of resolving to the **epoch**. The overflow guard relied on the `(int)` cast saturating, which holds only to 308 digits; beyond that the intermediate float is `INF` and `(int) INF` is `0`, so an absurdly long operand satisfied every `Before` comparison. ([#2468](https://github.com/canopy-labs/featureflip/issues/2468))
+- An ISO-8601 operand naming hour 24 (`2024-01-01T24:00:00`) matches nothing, rather than rolling over to the next day. ([#2468](https://github.com/canopy-labs/featureflip/issues/2468))
+
+## 3.1.0 — 2026-08-24
+
+### Fixed
+
+- **A rejected batch of analytics events is now noticed at all.** `HttpClient::post()` reported success for every response it received, because a PSR-18 client throws only on a *transport* fault — a 4xx or 5xx is an ordinary return value to it, not an exception. A 503 was therefore indistinguishable from a delivered batch: the `dropped N analytics event(s)` reporting added in 3.0.0 could not fire for it, and the events were thrown away as sent. Any non-2xx response is now a failure and carries its status through to the log line. This is the half that mattered in production, where the public edge answers this endpoint with a 503 at a low but constant rate — evaluation analytics were being lost steadily *and* invisibly. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+- **Events survive a failed delivery instead of being discarded.** `flush()` chunked and cleared the queue *before* posting anything, so a batch the endpoint refused was already gone by the time the refusal was known. A retryable failure — any 5xx, a 429, or a transport fault — now returns the batch to the *front* of the queue for the next flush, ahead of newer events. A permanent one still drops the batch, because retrying it would never succeed and would pin the queue at its bound: a 401 or 403 means the SDK key was rejected, a 400 means the body is malformed. Both outcomes are logged, and the line distinguishes what was kept from what was dropped. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+- **The event queue is bounded at 10,000 events.** Keeping failed batches means an outage would otherwise grow it without limit. Past the bound the *oldest* events are shed and the count is reported — memory stays capped, the freshest analytics are the ones kept, and a long outage sheds the stale re-queued batches rather than starving new events. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+- **A failing endpoint is retried once per `flushInterval`, not once per evaluation.** A re-queued batch leaves the queue at or above `flushBatchSize`, so the batch-size trigger would have fired on every subsequent event — one HTTP request per evaluation into an endpoint that is already failing, which is worse for the server than the dropping this release replaces. That trigger now backs off for one `flushInterval` after a retryable failure and resumes the moment a batch is delivered. The interval trigger is untouched: it is the retry vehicle. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+- **The shutdown flush makes one attempt and lets the rest go.** Re-queueing during shutdown would keep events for a flush that will never come, and retrying until the queue drained would hang the process for as long as the endpoint stayed down. Whatever the final attempt cannot deliver is discarded, and reported. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+
+### Notes
+
+- `EventProcessor` — already `@internal` — takes `maxQueueSize` as a trailing constructor argument, so existing positional construction is unaffected, and gains `close()` for the final flush. `HttpClient` gains `lastFailure()`, which carries the response status alongside the message `lastError()` already returned; `lastError()` is unchanged.
+
 ## 3.0.2 — 2026-08-23
 
 ### Fixed

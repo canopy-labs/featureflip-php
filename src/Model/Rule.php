@@ -21,10 +21,10 @@ final class Rule
             id: $data['id'] ?? '',
             priority: $data['priority'] ?? 0,
             conditionGroups: array_map(
-                fn(array $g) => ConditionGroup::fromArray($g),
+                fn(array $g) => ConditionGroup::fromArray($g, sprintf('rule[%s].conditionGroup', $data['id'] ?? '')),
                 $data['conditionGroups'] ?? [],
             ),
-            serve: ServeConfig::fromArray($data['serve'] ?? []),
+            serve: ServeConfig::fromArray($data['serve'] ?? [], sprintf('rule[%s].serve', $data['id'] ?? '')),
             segmentKey: $data['segmentKey'] ?? null,
         );
     }

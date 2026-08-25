@@ -48,7 +48,7 @@ final class Flag
                 fn(array $r) => Rule::fromArray($r),
                 $data['rules'] ?? [],
             ),
-            fallthrough: isset($data['fallthrough']) ? ServeConfig::fromArray($data['fallthrough']) : null,
+            fallthrough: isset($data['fallthrough']) ? ServeConfig::fromArray($data['fallthrough'], 'fallthrough') : null,
             offVariation: $data['offVariation'] ?? null,
             prerequisites: array_map(
                 fn(array $p) => Prerequisite::fromArray($p),

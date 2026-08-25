@@ -106,6 +106,43 @@ final class GoldenMalformedTest extends TestCase
                 $applied = $store->getFlag('mc-accepted-flag') !== null
                     || isset($store->getSegments()['mc-accepted']);
                 self::assertTrue($applied, "{$label}: a forward-compatible payload was rejected");
+            } elseif ($v['expect'] === 'dropEntity') {
+                // Neither accept nor reject: the payload APPLIES, minus the entities
+                // carrying an enum this build cannot evaluate. Both halves are
+                // asserted — "dropped" alone is satisfied by discarding the whole
+                // payload, and "kept" alone by tolerating the bad value.
+                //
+                // php reaches this outcome through the SAME per-entry skip it already
+                // used for malformed entries, which is why every dropEntity payload
+                // must retain at least one flag: a payload whose every flag was dropped
+                // would trip Poller's last-known-good guard and read as "the drop did
+                // not happen".
+                foreach ($v['dropFlags'] ?? [] as $key) {
+                    self::assertNull(
+                        $store->getFlag($key),
+                        "{$label}: flag {$key} should have been dropped",
+                    );
+                }
+                foreach ($v['dropSegments'] ?? [] as $key) {
+                    self::assertArrayNotHasKey(
+                        $key,
+                        $store->getSegments(),
+                        "{$label}: segment {$key} should have been dropped",
+                    );
+                }
+                foreach ($v['keepFlags'] ?? [] as $key) {
+                    self::assertNotNull(
+                        $store->getFlag($key),
+                        "{$label}: flag {$key} should have been kept",
+                    );
+                }
+                foreach ($v['keepSegments'] ?? [] as $key) {
+                    self::assertArrayHasKey(
+                        $key,
+                        $store->getSegments(),
+                        "{$label}: segment {$key} should have been kept",
+                    );
+                }
             } else {
                 self::fail("unmapped expect {$v['expect']}");
             }

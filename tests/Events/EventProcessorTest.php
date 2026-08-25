@@ -25,11 +25,14 @@ final class EventProcessorTest extends TestCase
     public function testFlushSendsEvents(): void
     {
         $httpClient = $this->createMock(HttpClient::class);
+        // The return value matters since #2456: false means the batch was not
+        // delivered, and an undelivered batch is now kept rather than discarded.
         $httpClient->expects($this->once())
             ->method('post')
             ->with('/v1/sdk/events', $this->callback(function (array $body): bool {
                 return isset($body['events']) && count($body['events']) === 2;
-            }));
+            }))
+            ->willReturn(true);
 
         $processor = new EventProcessor($httpClient, 100);
         $processor->push(Event::evaluation('flag-1', ['user_id' => '123'], 'on'));
@@ -51,7 +54,7 @@ final class EventProcessorTest extends TestCase
     public function testFlushBatchesLargeQueues(): void
     {
         $httpClient = $this->createMock(HttpClient::class);
-        $httpClient->expects($this->exactly(2))->method('post');
+        $httpClient->expects($this->exactly(2))->method('post')->willReturn(true);
 
         $processor = new EventProcessor($httpClient, 3);
         for ($i = 0; $i < 5; $i++) {

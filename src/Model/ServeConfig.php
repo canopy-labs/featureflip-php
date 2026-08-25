@@ -15,8 +15,13 @@ final class ServeConfig
         public readonly ?array $variations,
     ) {}
 
-    public static function fromArray(array $data): self
+    public static function fromArray(array $data, string $path = 'serve'): self
     {
+        // An unrecognised serve type would fall to the ROLLOUT arm in
+        // Evaluator::resolveVariationKey and bucket against weights that may not exist.
+        // Drop the containing entity instead of guessing (#2402).
+        UnevaluableEntityException::assertServeType($data['type'] ?? null, $path . '.type');
+
         return new self(
             type: $data['type'] ?? 'Fixed',
             variation: $data['variation'] ?? null,

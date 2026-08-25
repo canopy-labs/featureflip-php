@@ -100,6 +100,14 @@ refreshes on the evaluation path once the poll interval has elapsed, and queued
 events drain when they reach `flushBatchSize` or when `flushInterval` passes,
 whichever comes first.
 
+A batch the events endpoint cannot take right now — a 5xx, a 429, a refused
+connection — is kept and retried on the next flush rather than thrown away, at
+most once per `flushInterval` so a struggling endpoint is not hammered. A batch
+it rejects outright (a bad SDK key, a malformed body) is dropped, because
+retrying it would never succeed. Either way the SDK says so through your logger.
+The queue holds at most 10,000 events; past that the oldest are shed, so a long
+outage costs bounded memory rather than an unbounded buffer.
+
 Nothing is required of you. If you would rather the refresh happened *between*
 requests than inside one, call `refresh()` from your worker's tick hook:
 

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Featureflip\Store;
 
-use Featureflip\Model\{Flag, Segment};
+use Featureflip\Model\{Flag, Segment, UnevaluableEntityException};
 use Featureflip\Logging\ErrorLogLogger;
 use Psr\Log\LoggerInterface;
 use Psr\SimpleCache\CacheInterface;
@@ -188,15 +188,29 @@ final class FlagStore
         // write would break every request indefinitely. Discard it and start
         // cold instead.
         try {
+            // An entity this build cannot EVALUATE is skipped individually rather than
+            // taking the whole cached snapshot with it (#2402) — same blast-radius
+            // reasoning as Poller::parseEach. Only reachable after an SDK DOWNGRADE,
+            // since the cache is written from entities that parsed cleanly, but
+            // discarding every cached flag over one of them is the outcome the
+            // entity-drop exists to avoid.
             $flags = [];
             foreach ($snapshot['flags'] as $data) {
-                $flag = Flag::fromArray($data);
+                try {
+                    $flag = Flag::fromArray($data);
+                } catch (UnevaluableEntityException $e) {
+                    continue;
+                }
                 $flags[$flag->key] = $flag;
             }
 
             $segments = [];
             foreach ($snapshot['segments'] as $data) {
-                $segment = Segment::fromArray($data);
+                try {
+                    $segment = Segment::fromArray($data);
+                } catch (UnevaluableEntityException $e) {
+                    continue;
+                }
                 $segments[$segment->key] = $segment;
             }
         } catch (\Throwable $e) {

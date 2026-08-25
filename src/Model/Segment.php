@@ -16,6 +16,15 @@ final class Segment
 
     public static function fromArray(array $data): self
     {
+        // An unrecognised conditionLogic would fall to the AND arm in
+        // Evaluator::evaluateConditions, silently applying logic the server did not ask
+        // for. Drop the segment instead of guessing (#2402). Rules pointing at it then
+        // resolve to nothing, which evaluateRule already treats as no-match.
+        UnevaluableEntityException::assertConditionLogic(
+            $data['conditionLogic'] ?? null,
+            'conditionLogic',
+        );
+
         return new self(
             key: RequiredField::string($data, 'key', 'segment'),
             version: $data['version'] ?? 0,

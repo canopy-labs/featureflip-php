@@ -18,12 +18,12 @@ class HttpClient
      * CHANGELOG.md's newest heading by tools/check-sdk-versions (CI workflow
      * sdk-version-consistency.yml). Bump both together.
      */
-    private const VERSION = '3.0.2';
+    private const VERSION = '3.1.1';
 
     private LoggerInterface $logger;
 
-    /** Message from the most recent failed post, for the caller to report. */
-    private ?string $lastError = null;
+    /** Why the most recent post failed, for the caller to classify and report. */
+    private ?PostFailure $lastFailure = null;
 
     public function __construct(
         private readonly ClientInterface $client,
@@ -61,12 +61,25 @@ class HttpClient
      */
     public function lastError(): ?string
     {
-        return $this->lastError;
+        return $this->lastFailure?->message;
+    }
+
+    /**
+     * Why the most recent {@see post()} failed, if it did — the status it came
+     * back with, and whether the same body is worth sending again.
+     *
+     * Read it immediately after a `post()` that returned false: it describes
+     * that call and is replaced by the next one.
+     */
+    public function lastFailure(): ?PostFailure
+    {
+        return $this->lastFailure;
     }
 
     /**
      * Best-effort delivery. Returns false when the payload could not be sent,
-     * so the caller can report once per flush rather than once per batch.
+     * so the caller can report once per flush rather than once per batch;
+     * {@see lastFailure()} carries why.
      *
      * @param array<string, mixed> $body
      */
@@ -80,7 +93,21 @@ class HttpClient
                 ->withHeader('Content-Type', 'application/json')
                 ->withBody($this->streamFactory->createStream($json));
 
-            $this->client->sendRequest($request);
+            $response = $this->client->sendRequest($request);
+            $status = $response->getStatusCode();
+
+            // A PSR-18 client throws only on a TRANSPORT fault — a 4xx or 5xx is
+            // an ordinary return value to it. So the catch below never saw one,
+            // and every rejected batch was counted as delivered: the reporting
+            // added by #2258 could not fire for the 503 the public edge answers
+            // this endpoint with, and the events were discarded as sent (#2456).
+            if ($status < 200 || $status >= 300) {
+                $this->lastFailure = new PostFailure("HTTP {$status} from {$path}", $status);
+
+                return false;
+            }
+
+            $this->lastFailure = null;
 
             return true;
         } catch (\Throwable $e) {
@@ -90,7 +117,9 @@ class HttpClient
             // absent with nothing to explain it (#2258). Reporting is left to
             // the caller so one failed flush is one log line, however many
             // batches it was chunked into.
-            $this->lastError = $e->getMessage();
+            //
+            // No status: nothing came back, so the caller treats it as transient.
+            $this->lastFailure = new PostFailure($e->getMessage());
 
             return false;
         }

@@ -9,6 +9,13 @@ use Featureflip\Model\Condition;
 final class ConditionEvaluator
 {
     /**
+     * DateTimeOffset.MinValue / MaxValue as unix seconds — the exact bounds the engine's
+     * FromUnixTimeSeconds accepts before throwing (#2432).
+     */
+    private const MIN_UNIX_SECONDS = -62135596800;
+    private const MAX_UNIX_SECONDS = 253402300799;
+
+    /**
      * @param array<string, mixed> $context
      */
     public function evaluate(Condition $condition, array $context): bool
@@ -239,6 +246,44 @@ final class ConditionEvaluator
     }
 
     /**
+     * Rewrites an accepted ISO-8601 operand into the strict extended form: "T" separator,
+     * seconds present, offset spelled "+HH:MM" or "Z". Returns null when $s is not an
+     * accepted ISO shape.
+     *
+     * The grammar is pinned here rather than delegated to \DateTimeImmutable, which is
+     * very lenient (it would accept "now"/"tomorrow") and, unlike the engine, rolls hour
+     * 24 over to 00:00 the next day instead of rejecting it (#2468).
+     */
+    private function canonicalizeIso(string $s): ?string
+    {
+        $pattern = '/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(\.\d+)?'
+            . '(Z|[+-]\d{2}:?\d{2})?)?$/';
+        if (preg_match($pattern, $s, $m) !== 1) {
+            return null;
+        }
+
+        $date = $m[1];
+        $hh = $m[2] ?? '';
+        if ($hh === '') {
+            return $date;
+        }
+        if ($hh >= '24') {
+            return null;
+        }
+
+        $mm = $m[3];
+        $ss = ($m[4] ?? '') !== '' ? $m[4] : '00';
+        $frac = $m[5] ?? '';
+        $off = $m[6] ?? '';
+        // Basic offset (+0500) -> extended (+05:00).
+        if (strlen($off) === 5 && $off !== 'Z') {
+            $off = substr($off, 0, 3) . ':' . substr($off, 3);
+        }
+
+        return $date . 'T' . $hh . ':' . $mm . ':' . $ss . $frac . $off;
+    }
+
+    /**
      * Parses a date-time string into a UTC \DateTimeImmutable, mirroring the
      * evaluation service's TryParseDateTime so server-side and SDK-local
      * evaluation agree:
@@ -254,19 +299,33 @@ final class ConditionEvaluator
      */
     private function parseDateTime(string $value): ?\DateTimeImmutable
     {
-        $s = trim($value);
+        // Trim exactly the engine's whitespace class -- U+0009..U+000D plus U+0020, the
+        // class NumberStyles.Integer accepts via AllowLeadingWhite | AllowTrailingWhite.
+        //
+        // Bare trim() is deliberately NOT used: its default charlist omits "\f" (which the
+        // engine accepts) and includes "\0" (which it does not), so "\f5" matched nothing
+        // here while "\x005" matched five seconds past the epoch -- wrong in both
+        // directions (#2468).
+        $s = trim($value, "\t\n\x0B\f\r ");
         if ($s === '') {
             return null;
         }
 
-        // ISO-8601 date or date-time, with an optional time, fractional seconds,
-        // and an optional Z / numeric timezone offset.
-        $isoPattern = '/^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/';
-        if (preg_match($isoPattern, $s)) {
+        // Characters no date operand may contain: a NUL or other control character, or a
+        // non-ASCII whitespace/format character. An interior ASCII space is allowed -- it
+        // is the ISO-8601 date/time separator. /u so the class matches by codepoint.
+        $forbidden = '/[\x{0000}-\x{001f}\x{007f}-\x{009f}\x{00a0}\x{1680}\x{2000}-\x{200a}'
+            . '\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}\x{feff}]/u';
+        if (preg_match($forbidden, $s)) {
+            return null;
+        }
+
+        $canonical = $this->canonicalizeIso($s);
+        if ($canonical !== null) {
             try {
-                // A supplied UTC timezone is only used when $s has no offset; an
-                // explicit offset/Z in $s takes precedence. Normalize to UTC.
-                return (new \DateTimeImmutable($s, new \DateTimeZone('UTC')))
+                // A supplied UTC timezone is only used when the operand has no offset; an
+                // explicit offset/Z takes precedence. Normalize to UTC.
+                return (new \DateTimeImmutable($canonical, new \DateTimeZone('UTC')))
                     ->setTimezone(new \DateTimeZone('UTC'));
             } catch (\Exception) {
                 return null;
@@ -275,9 +334,44 @@ final class ConditionEvaluator
 
         // Unix timestamp fallback (seconds since epoch). The "@" format always
         // interprets the value as UTC.
-        if (preg_match('/^-?\d+$/', $s)) {
+        //
+        // The sign class matches the engine's long.TryParse with NumberStyles.Integer
+        // (AllowLeadingWhite | AllowTrailingWhite | AllowLeadingSign), so a leading "+"
+        // is accepted deliberately rather than incidentally, and the (int) cast reads it
+        // the same way. Omitting it made "+5" an unparseable string that matched NOTHING
+        // here while the engine and four other SDKs read it as five seconds past the
+        // epoch (#2458).
+        //
+        // The whitespace flags now match too: the trim above uses the engine's exact
+        // charlist and anything outside it was already rejected (#2468). The digit class
+        // stays ASCII because there is no /u modifier, which is what the engine does too.
+        if (preg_match('/^[+-]?\d+$/', $s)) {
+            // Unix seconds outside DateTimeOffset's range match NOTHING rather than
+            // wrapping to a far-future instant: the engine's FromUnixTimeSeconds throws
+            // there and TryParseDateTime returns false. The case that matters in practice
+            // is a MILLISECONDS timestamp pasted where seconds belong -- Date.now() is the
+            // obvious way to produce one -- which would otherwise become an instant in the
+            // year 55829 and satisfy every After comparison (#2432).
+            //
+            // A digit string beyond PHP's int range saturates to PHP_INT_MAX on cast,
+            // which is far above MAX_UNIX_SECONDS, so overflow is normally caught by the
+            // same bounds check rather than needing its own branch.
+            //
+            // That holds to 308 digits ONLY. At 309+ the intermediate float is INF, and
+            // (int) INF is 0 -- so "9" x 400 became the EPOCH here, sailing through the
+            // bounds check and matching every Before comparison, where the engine's
+            // long.TryParse overflows and returns no-match. js is immune because it tests
+            // Number.isFinite; php needs the length check (#2468).
+            if (!is_finite((float) $s)) {
+                return null;
+            }
+            $seconds = (int) $s;
+            if ($seconds < self::MIN_UNIX_SECONDS || $seconds > self::MAX_UNIX_SECONDS) {
+                return null;
+            }
+
             try {
-                return (new \DateTimeImmutable('@' . $s))
+                return (new \DateTimeImmutable('@' . $seconds))
                     ->setTimezone(new \DateTimeZone('UTC'));
             } catch (\Exception) {
                 return null;

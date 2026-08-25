@@ -292,7 +292,10 @@ final class SharedFeatureflipCore
             fastcgi_finish_request();
         }
 
-        $this->flush();
+        // close(), not flush(): this is the last attempt this process will make,
+        // so a batch the endpoint rejects must be let go rather than re-queued
+        // for a flush that will never come (#2456).
+        $this->eventProcessor?->close();
     }
 
     /**

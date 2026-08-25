@@ -6,7 +6,7 @@ namespace Featureflip\DataSource;
 
 use Featureflip\Http\HttpClient;
 use Featureflip\Logging\ErrorLogLogger;
-use Featureflip\Model\{Flag, Segment};
+use Featureflip\Model\{Flag, Segment, UnevaluableEntityException};
 use Featureflip\Store\FlagStore;
 use Psr\Log\LoggerInterface;
 
@@ -86,6 +86,20 @@ final class Poller
         foreach ($entries as $entry) {
             try {
                 $parsed[] = $parse($entry);
+            } catch (UnevaluableEntityException $e) {
+                // Well-formed, just not evaluable by this build — a newer server
+                // describing behaviour this SDK version does not implement (#2402).
+                // Called out separately from the malformed case below because calling a
+                // valid payload malformed sends whoever reads this log looking for a
+                // server bug that isn't there; the fix is to upgrade the SDK.
+                $this->logger->warning(sprintf(
+                    'dropped a %s this SDK version cannot evaluate (%s): %s; the rest of the configuration was applied',
+                    $kind,
+                    is_array($entry) && isset($entry['key']) && is_scalar($entry['key'])
+                        ? 'key ' . $entry['key']
+                        : 'no usable key',
+                    $e->getMessage(),
+                ));
             } catch (\Throwable $e) {
                 $this->logger->warning(sprintf(
                     'skipped a malformed %s in the flag configuration (%s): %s',
