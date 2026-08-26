@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.2.0 — 2026-08-26
+
+### Changed
+
+- A `Before`/`After` date operand that matches the ISO grammar but names no real calendar day now matches nothing, where it previously **rolled over into the following month**. `2024-02-30` resolved to 2024-03-01, `2023-02-29` (2023 is not a leap year) to 2023-03-01 and `2024-04-31` to 2024-05-01 — so a rule evaluated against a date its author never wrote. The evaluation engine and the C#, Go, Python and Java SDKs have always rejected these, so this converges the SDKs rather than making this one an outlier; until now a single saved rule could serve different variations to two users purely by which SDK their service ran. Follows #2480, which pinned the date *grammar* — an unreal day is **inside** that grammar, because a character class cannot express "is a real day", so the grammar guard was silent on it. ([#2491](https://github.com/canopy-labs/featureflip/issues/2491))
+
+- A zero month or zero day is also rejected. This SDK was alone in rolling these **backwards** into the previous year — `2024-00-01` resolved to 2023-12-01 and `2024-01-00` to 2023-12-31 — where the JS and Ruby SDKs already matched nothing. ([#2491](https://github.com/canopy-labs/featureflip/issues/2491))
+
+- The leap-year rule is applied in full, including the century exception: `1900-02-29` and `2100-02-29` match nothing (divisible by 100 but not 400), while `2000-02-29` and `2024-02-29` continue to match. The check runs on the operand's **written** date, before any offset is applied, so `2024-02-30T00:00:00+05:00` is rejected even though it would resolve to 2024-02-29T19:00Z — a date that does exist. ([#2491](https://github.com/canopy-labs/featureflip/issues/2491))
+
+**If you have a targeting rule using one of these operands**, rewrite it as the date you meant. The Management API has rejected an unreal day on write since #2480 (`PortableDateOperand` round-trips every grammar-matched operand through the engine's parser), so a rule saved from that release onward cannot carry one — only rules saved earlier are affected.
+
+### Fixed
+
+- A `Before`/`After` date operand that resolves outside the representable date range now matches nothing, where it previously resolved to a real instant. The evaluation engine parses with `DateTimeOffset.TryParse`, so its accepted range is 0001-01-01T00:00:00Z to 9999-12-31T23:59:59.999Z and it matches nothing outside that; this SDK resolved past **both** ends, so a single saved rule served different variations to two users purely by which SDK their service ran. ([#2500](https://github.com/canopy-labs/featureflip/issues/2500))
+
+- The two reachable shapes are a **year-zero** operand and an operand carried out of range **by its offset**. `0000-01-01` is inside the ISO grammar and is a real proleptic date (`0000-02-29` exists — year 0 is divisible by 400), so neither #2480's grammar guard nor #2491's calendar-day check excluded it. Separately, `[0-9]{4}` constrains only the **written** year while a timezone offset moves the resolved instant, so `0001-01-01T00:00:00+05:00` fell below the floor and `9999-12-31T23:59:59-05:00` rose above the ceiling from years the grammar allows. The check therefore runs on the **resolved** instant — deliberately unlike #2491's, which runs on the written date. ([#2500](https://github.com/canopy-labs/featureflip/issues/2500))
+
+- The exact boundaries remain accepted: `0001-01-01`, `0001-01-01T05:00:00+05:00`, `9999-12-31T23:59:59Z` and `9999-12-31T18:59:59-05:00` all still resolve. ([#2500](https://github.com/canopy-labs/featureflip/issues/2500))
+
+**If you have a targeting rule using one of these operands**, rewrite it as the date you meant. The Management API has rejected them on write since #2480 (`PortableDateOperand` round-trips every grammar-matched operand through the engine's own parser, so it inherits the range bound), meaning only rules saved before that release can carry one.
+
 ## 3.1.1 — 2026-08-24
 
 ### Fixed
@@ -35,6 +57,7 @@
 ### Changed
 
 - A type-mismatched read returns the caller's default and reports `'ERROR'`, instead of returning it under the evaluator's *success* reason, which left callers no signal at all. Reading a String flag through a number accessor, say, is now detectable rather than silent. Matching reads and the generic/JSON accessors are unchanged. ([#2281](https://github.com/canopy-labs/featureflip/issues/2281))
+
 ## 3.0.0 — 2026-08-19
 
 ### Removed

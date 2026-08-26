@@ -246,6 +246,52 @@ final class ConditionEvaluator
     }
 
     /**
+     * Length of each month in a non-leap year, indexed 1..12. Index 0 is unused padding.
+     */
+    private const DAYS_IN_MONTH = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+    /**
+     * Whether $date -- always "YYYY-MM-DD", since only canonicalizeIso() calls this --
+     * names a day that exists.
+     *
+     * The ISO pattern matches the SHAPE of a calendar date and a character class cannot
+     * express "is a real day", so "2024-02-30", "2023-02-29" and "2024-04-31" all pass the
+     * grammar. The engine, csharp, go, python and java then reject them at parse; php, js
+     * and ruby ROLLED THEM OVER into the 1st of the following month, so one saved rule
+     * served different variations to two users purely by which SDK their service ran
+     * (#2491).
+     *
+     * php diverged in one shape the other two did not: a zero month or zero day rolled
+     * BACKWARDS into the previous year, so "2024-00-01" resolved to 2023-12-01 and
+     * "2024-01-00" to 2023-12-31.
+     *
+     * Hand-rolled rather than delegated to checkdate(), which is correct here but is one
+     * of three different platform notions of a valid date -- ruby's Date.valid_date?
+     * applies the Italian calendar reform by default and rejects 1582-10-05..14, which the
+     * engine resolves normally. Computing the arithmetic identically in php, js and ruby is
+     * what keeps the accepted set a property of THIS contract rather than of three separate
+     * calendars.
+     *
+     * Proleptic Gregorian, matching the engine: the leap rule applies at every year rather
+     * than from a reform date onward.
+     */
+    private function isRealCalendarDay(string $date): bool
+    {
+        $year = (int) substr($date, 0, 4);
+        $month = (int) substr($date, 5, 2);
+        $day = (int) substr($date, 8, 2);
+
+        if ($month < 1 || $month > 12 || $day < 1) {
+            return false;
+        }
+
+        $leapDay = ($month === 2 && $year % 4 === 0 && ($year % 100 !== 0 || $year % 400 === 0))
+            ? 1 : 0;
+
+        return $day <= self::DAYS_IN_MONTH[$month] + $leapDay;
+    }
+
+    /**
      * Rewrites an accepted ISO-8601 operand into the strict extended form: "T" separator,
      * seconds present, offset spelled "+HH:MM" or "Z". Returns null when $s is not an
      * accepted ISO shape.
@@ -263,6 +309,14 @@ final class ConditionEvaluator
         }
 
         $date = $m[1];
+
+        // Checked on the WRITTEN date, before any offset is applied. Validating the
+        // resolved UTC components instead would accept "2024-02-30T00:00:00+05:00", which
+        // lands on 2024-02-29T19:00Z -- a date that does exist.
+        if (!$this->isRealCalendarDay($date)) {
+            return null;
+        }
+
         $hh = $m[2] ?? '';
         if ($hh === '') {
             return $date;
@@ -325,11 +379,36 @@ final class ConditionEvaluator
             try {
                 // A supplied UTC timezone is only used when the operand has no offset; an
                 // explicit offset/Z takes precedence. Normalize to UTC.
-                return (new \DateTimeImmutable($canonical, new \DateTimeZone('UTC')))
+                $parsed = (new \DateTimeImmutable($canonical, new \DateTimeZone('UTC')))
                     ->setTimezone(new \DateTimeZone('UTC'));
             } catch (\Exception) {
                 return null;
             }
+
+            // The SAME range the integer branch below enforces, applied to the RESOLVED
+            // instant. The engine parses with DateTimeOffset.TryParse, so its accepted set
+            // is bounded by DateTimeOffset's range and it returns false outside it; php,
+            // js, ruby, go and java all resolve past both ends -- year 0 to a real
+            // instant, and a 4-digit year plus an offset to one beyond either bound
+            // (#2500).
+            //
+            // Checked on the RESOLVED instant, deliberately unlike the WRITTEN-triple
+            // check in isRealCalendarDay(). The two answer different questions: whether
+            // the operand names a real DAY is a property of what was written
+            // ("2024-02-30T00:00:00+05:00" lands on a real UTC day but names none),
+            // whereas whether it is REPRESENTABLE is a property of what it resolves to --
+            // the offset is exactly what carries "0001-01-01T00:00:00+05:00" under the
+            // floor and "9999-12-31T23:59:59-05:00" over the ceiling.
+            //
+            // getTimestamp() floors, matching the other SDKs: a fractional second is
+            // always a non-negative addend, so "0000-12-31T23:59:59.5Z" floors to MIN-1
+            // and is rejected while "0001-01-01T00:00:00.5Z" floors to MIN and is kept.
+            $seconds = $parsed->getTimestamp();
+            if ($seconds < self::MIN_UNIX_SECONDS || $seconds > self::MAX_UNIX_SECONDS) {
+                return null;
+            }
+
+            return $parsed;
         }
 
         // Unix timestamp fallback (seconds since epoch). The "@" format always

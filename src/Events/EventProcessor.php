@@ -123,6 +123,12 @@ final class EventProcessor
         // a flag and queue another event. Taking the batches as a snapshot below
         // stops that becoming infinite for any batch size above one; this guard
         // covers batch size one as well.
+        //
+        // Every other SDK coalesces here by WAITING for the drain already running,
+        // so a caller that asked for a flush gets one (#2477). PHP is the deliberate
+        // exception, and not for want of consistency: the only way to re-enter this
+        // method is from inside the PSR-18 call this very frame is making, so there
+        // is no other thread to wait for — waiting would be waiting on itself.
         if ($this->isFlushing || $this->queue === []) {
             return;
         }

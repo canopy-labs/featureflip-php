@@ -99,6 +99,21 @@ final class GoldenVectorTest extends TestCase
     }
 
     /**
+     * Hand-authored because the ENGINE DISSENTS: DateTimeOffset.TryParse under the
+     * invariant culture resolves "05/15/2023", "Jan 1 2024" and "2024.01.01", so
+     * generating these would assert the opposite of what every SDK must do (#2480).
+     * The engine keeps that leniency deliberately -- narrowing it would stop an
+     * already-saved operand from evaluating -- and Management rejects them on write.
+     * The six SDKs that always rejected these did so as a SIDE EFFECT of their
+     * grammar and not one of them asserted it, which is how js came to resolve a
+     * non-ISO operand in the host's timezone unnoticed.
+     */
+    public function testDateGrammarVectors(): void
+    {
+        $this->runConditionVectors(self::$vectors['dateGrammarVectors']);
+    }
+
+    /**
      * Builds the single-condition flag each vector describes and asserts whether
      * the "match" variation is served. Shared by the engine-generated condition
      * vectors and the hand-authored unknown-operator vectors, which have an
