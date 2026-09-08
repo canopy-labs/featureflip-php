@@ -76,18 +76,32 @@ final class ConditionEvaluator
     {
         return in_array(
             $this->normalizeOperator($operator),
-            ['equals', 'not_equals', 'in', 'not_in'],
+            ['equals', 'notequals', 'in', 'notin'],
             true,
         );
     }
 
     /**
-     * Normalizes PascalCase operators from the API (e.g. "NotEquals") to
-     * snake_case ("not_equals").
+     * The single definition of "recognised operator" shared by the four
+     * string-typed SDKs (js, go, ruby, php) — see #2374. Strips underscores and
+     * folds case, so the canonical PascalCase the API emits ("NotEquals"), the
+     * snake_case form this SDK already accepted ("not_equals") and the
+     * concatenated form go accepted ("notequals", "NOTEQUALS") all resolve to
+     * one label.
+     *
+     * This replaces a rule that INSERTED underscores before PascalCase runs.
+     * That rule rejected "notequals", which go accepted, while go rejected
+     * "not_equals", which this SDK accepted — each refused a form the other
+     * allowed. Normalising by removal makes the shared rule a superset of both,
+     * so no SDK gets stricter and no configuration that evaluated before stops
+     * doing so.
+     *
+     * The concatenated labels stay unambiguous under this mapping — no two
+     * operator names collide once underscores are removed.
      */
     private function normalizeOperator(string $operator): string
     {
-        return strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', $operator) ?? $operator);
+        return strtolower(str_replace('_', '', $operator));
     }
 
     /**
@@ -114,29 +128,29 @@ final class ConditionEvaluator
      */
     private function evaluateOperator(string $operator, string $value, array $targets): ?bool
     {
-        // Normalize PascalCase operators from API (e.g. "NotEquals") to snake_case ("not_equals")
+        // Resolve every spelling of the operator to one label before dispatch.
         $operator = $this->normalizeOperator($operator);
 
         return match ($operator) {
             'equals', 'in' => $this->anyMatch($targets, fn(string $t) => mb_strtolower($value) === mb_strtolower($t)),
-            'not_equals', 'not_in' => !$this->anyMatch($targets, fn(string $t) => mb_strtolower($value) === mb_strtolower($t)),
+            'notequals', 'notin' => !$this->anyMatch($targets, fn(string $t) => mb_strtolower($value) === mb_strtolower($t)),
             'contains' => $this->anyMatch($targets, fn(string $t) => str_contains(mb_strtolower($value), mb_strtolower($t))),
-            'not_contains' => !$this->anyMatch($targets, fn(string $t) => str_contains(mb_strtolower($value), mb_strtolower($t))),
-            'starts_with' => $this->anyMatch($targets, fn(string $t) => str_starts_with(mb_strtolower($value), mb_strtolower($t))),
-            'ends_with' => $this->anyMatch($targets, fn(string $t) => str_ends_with(mb_strtolower($value), mb_strtolower($t))),
+            'notcontains' => !$this->anyMatch($targets, fn(string $t) => str_contains(mb_strtolower($value), mb_strtolower($t))),
+            'startswith' => $this->anyMatch($targets, fn(string $t) => str_starts_with(mb_strtolower($value), mb_strtolower($t))),
+            'endswith' => $this->anyMatch($targets, fn(string $t) => str_ends_with(mb_strtolower($value), mb_strtolower($t))),
             // Case-sensitive matching on the original-case value and pattern,
             // mirroring the engine (RegexOptions.None). Case-insensitivity is
             // opt-in via the (?i) inline flag in the pattern. matchesRegex()
             // fails safe to no-match for malformed or pathological patterns.
-            'matches_regex' => $this->anyMatch($targets, fn(string $t) => $this->matchesRegex($t, $value)),
+            'matchesregex' => $this->anyMatch($targets, fn(string $t) => $this->matchesRegex($t, $value)),
             // Relational operators match if the value satisfies the comparison
             // against ANY condition value (mirroring the server engine), not just
             // $targets[0]. A non-numeric value/target contributes no match, and an
             // empty value list yields false.
-            'greater_than' => $this->numericMatches($value, $targets, fn(int $c) => $c > 0),
-            'greater_than_or_equal' => $this->numericMatches($value, $targets, fn(int $c) => $c >= 0),
-            'less_than' => $this->numericMatches($value, $targets, fn(int $c) => $c < 0),
-            'less_than_or_equal' => $this->numericMatches($value, $targets, fn(int $c) => $c <= 0),
+            'greaterthan' => $this->numericMatches($value, $targets, fn(int $c) => $c > 0),
+            'greaterthanorequal' => $this->numericMatches($value, $targets, fn(int $c) => $c >= 0),
+            'lessthan' => $this->numericMatches($value, $targets, fn(int $c) => $c < 0),
+            'lessthanorequal' => $this->numericMatches($value, $targets, fn(int $c) => $c <= 0),
             // Date operators parse both operands as real date-times, normalize to
             // UTC, and fall back to unix seconds — mirroring the engine's
             // CompareDateTime. An unparseable value matches nothing (never a
@@ -148,11 +162,11 @@ final class ConditionEvaluator
             // the operator for ANY supplied value (mirroring the engine and the
             // numeric/date any-of semantics). An unparseable value or target
             // contributes no match.
-            'semver_equals' => $this->semverMatches($value, $targets, fn(int $c) => $c === 0),
-            'semver_greater_than' => $this->semverMatches($value, $targets, fn(int $c) => $c > 0),
-            'semver_greater_than_or_equal' => $this->semverMatches($value, $targets, fn(int $c) => $c >= 0),
-            'semver_less_than' => $this->semverMatches($value, $targets, fn(int $c) => $c < 0),
-            'semver_less_than_or_equal' => $this->semverMatches($value, $targets, fn(int $c) => $c <= 0),
+            'semverequals' => $this->semverMatches($value, $targets, fn(int $c) => $c === 0),
+            'semvergreaterthan' => $this->semverMatches($value, $targets, fn(int $c) => $c > 0),
+            'semvergreaterthanorequal' => $this->semverMatches($value, $targets, fn(int $c) => $c >= 0),
+            'semverlessthan' => $this->semverMatches($value, $targets, fn(int $c) => $c < 0),
+            'semverlessthanorequal' => $this->semverMatches($value, $targets, fn(int $c) => $c <= 0),
             // Unrecognised operator — "cannot evaluate", not "did not match".
             default => null,
         };

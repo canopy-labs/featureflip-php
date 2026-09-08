@@ -699,4 +699,81 @@ final class ConditionEvaluatorTest extends TestCase
         $condition = new Condition('version', 'SemverLessThan', ['2.10'], false);
         $this->assertTrue($this->evaluator->evaluate($condition, ['version' => '2.9']));
     }
+    /**
+     * Issue #2374: the four string-typed SDKs (js, go, ruby, php) share ONE
+     * definition of "recognised operator" — underscores stripped, case folded.
+     * This SDK previously INSERTED underscores before PascalCase runs, so it
+     * accepted "not_equals" but rejected "notequals", which go accepted; go
+     * rejected "not_equals", which this SDK accepted. Each refused a form the
+     * other allowed. Normalising by removal is a superset of both, so nothing
+     * that evaluated before stops doing so.
+     *
+     * @param string[] $values
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('operatorSpellingProvider')]
+    public function testOperatorSpellingsResolveToOneOperator(
+        string $operator,
+        array $values,
+        bool $expected,
+    ): void {
+        $condition = new Condition('country', $operator, $values, false);
+        $this->assertSame($expected, $this->evaluator->evaluate($condition, ['country' => 'US']));
+    }
+
+    /**
+     * @return array<string, array{string, string[], bool}>
+     */
+    public static function operatorSpellingProvider(): array
+    {
+        return [
+            'canonical PascalCase from the API' => ['NotEquals', ['CA'], true],
+            'snake_case, already accepted here' => ['not_equals', ['CA'], true],
+            'concatenated, previously rejected here' => ['notequals', ['CA'], true],
+            'screaming concatenated' => ['NOTEQUALS', ['CA'], true],
+            'screaming snake, previously rejected everywhere' => ['NOT_EQUALS', ['CA'], true],
+            'single word needs no folding' => ['equals', ['US'], true],
+            'single word, screaming' => ['EQUALS', ['US'], true],
+        ];
+    }
+
+    /**
+     * The widened rule resolves SPELLINGS; it does not invent operators. A name
+     * that is not an operator stays unrecognised and keeps failing CLOSED even
+     * under negate — the #2262 guarantee, which #2374 must not weaken.
+     */
+    public function testUnknownOperatorStillFailsClosedUnderNegate(): void
+    {
+        foreach (['SomeFutureOperator', 'some_future_operator', ''] as $operator) {
+            $condition = new Condition('country', $operator, ['US'], true);
+            $this->assertFalse(
+                $this->evaluator->evaluate($condition, ['country' => 'US']),
+                sprintf('operator %s should fail closed', var_export($operator, true)),
+            );
+        }
+    }
+
+    /**
+     * Resolution must not lose the operator's case-sensitivity class: the regex
+     * arm reads the RAW operands, so a mis-cased spelling has to reach that same
+     * arm rather than one that pre-folds its inputs.
+     */
+    public function testMisCasedRegexStaysCaseSensitive(): void
+    {
+        $wrongCase = new Condition('name', 'matchesregex', ['^abc$'], false);
+        $this->assertFalse($this->evaluator->evaluate($wrongCase, ['name' => 'ABC']));
+
+        $rightCase = new Condition('name', 'matchesregex', ['^ABC$'], false);
+        $this->assertTrue($this->evaluator->evaluate($rightCase, ['name' => 'ABC']));
+    }
+
+    /**
+     * Same hazard on the numeric-coercion lookup: a mis-cased equality operator
+     * that skipped it would compare "1" against "1.0" lexically and not match.
+     */
+    public function testMisCasedEqualityOperatorStaysOnNumericPath(): void
+    {
+        $condition = new Condition('age', 'notequals', ['1.0'], false);
+        $this->assertFalse($this->evaluator->evaluate($condition, ['age' => 1]));
+    }
+
 }

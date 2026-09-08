@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.3.0 — 2026-09-01
+
+### Fixed
+
+- A condition operator is now recognised however it is spelled: `NotEquals`, `notequals`, `NOTEQUALS` and `not_equals` all resolve to the same operator. This SDK inserted underscores ahead of PascalCase runs, so it resolved the snake_case `not_equals` but treated the concatenated `notequals` as unrecognised — and an unrecognised operator fails closed (#2262), so such a rule matched nobody rather than erroring. go had the mirror-image rule (it folded case but kept underscores, resolving `notequals` and rejecting `not_equals`), and js and ruby refused both. Each accepted a form the others refused, so one saved rule could serve different variations to two users purely by which SDK their service ran. All four now normalise by removing underscores and folding case — the one rule that is a superset of all four previous ones, so no SDK gets stricter and no configuration that evaluated before stops doing so. ([#2374](https://github.com/canopy-labs/featureflip/issues/2374))
+
+- The operator is resolved **once** per condition and every subsequent lookup keys off that value, not just the dispatch arm. The operator name also selects the case-sensitivity set and the numeric-coercion set, so normalising at the dispatch alone would have made a mis-cased `MatchesRegex` match case-insensitively where its canonical spelling does not, and dropped a mis-cased `NotEquals` onto the string path, comparing `"1"` against `"1.0"` lexically. ([#2374](https://github.com/canopy-labs/featureflip/issues/2374))
+
+- The fail-closed guarantee is unchanged and re-asserted: this resolves *spellings*, it does not invent operators. A name that is not an operator is still unrecognised and still matches nothing before `negate` can invert it. ([#2262](https://github.com/canopy-labs/featureflip/issues/2262))
+
 ## 3.2.0 — 2026-08-26
 
 ### Changed
