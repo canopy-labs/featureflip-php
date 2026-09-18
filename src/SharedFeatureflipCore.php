@@ -40,6 +40,7 @@ final class SharedFeatureflipCore
     private bool $isShutDown = false;
 
     /**
+     * @param array<string, mixed>|null $testFlags
      * @param array<mixed> $inspectors Raw inspector list from Config; non-callable
      *                                 entries are dropped here so a bad entry can
      *                                 never blow up on the evaluation hot path.
@@ -86,7 +87,6 @@ final class SharedFeatureflipCore
             $streamFactory,
             $sdkKey,
             rtrim($config->baseUrl, '/'),
-            $logger,
         );
 
         $store = new FlagStore(

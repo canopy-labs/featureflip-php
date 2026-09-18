@@ -57,11 +57,11 @@ final class CoreContractTest extends TestCase
 
         $coreRef = new \ReflectionClass(SharedFeatureflipCore::class);
         $core = $coreRef->newInstanceWithoutConstructor();
-        $coreRef->getConstructor()->invoke($core, $store, null, null, null, $inspectors);
+        $coreRef->getMethod('__construct')->invoke($core, $store, null, null, null, $inspectors);
 
         $clientRef = new \ReflectionClass(FeatureflipClient::class);
         $client = $clientRef->newInstanceWithoutConstructor();
-        $clientRef->getConstructor()->invoke($client, $core);
+        $clientRef->getMethod('__construct')->invoke($client, $core);
 
         return $client;
     }

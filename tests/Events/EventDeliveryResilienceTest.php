@@ -306,7 +306,6 @@ final class EventDeliveryResilienceTest extends TestCase
             $factory,
             'sdk-key',
             'http://eval.test',
-            $this->logger,
         );
 
         return new EventProcessor($httpClient, $batchSize, $this->logger, $flushInterval, $maxQueueSize);
@@ -334,10 +333,10 @@ final class EventsEndpoint implements ClientInterface
     /** @return list<string> */
     public function flagKeysOfPost(int $index): array
     {
-        return array_map(
+        return array_values(array_map(
             static fn (array $event): string => (string) $event['flagKey'],
             $this->bodies[$index]['events'] ?? [],
-        );
+        ));
     }
 
     public function sendRequest(RequestInterface $request): ResponseInterface

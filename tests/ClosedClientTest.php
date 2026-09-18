@@ -109,7 +109,7 @@ final class ClosedClientTest extends TestCase
     {
         $params = array_map(
             static fn (\ReflectionParameter $p): string => $p->getName(),
-            (new \ReflectionClass(Config::class))->getConstructor()?->getParameters() ?? [],
+            (new \ReflectionClass(Config::class))->getMethod('__construct')->getParameters(),
         );
 
         $this->assertNotContains('initTimeout', $params);

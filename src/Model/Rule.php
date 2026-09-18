@@ -15,6 +15,7 @@ final class Rule
         public readonly ?string $segmentKey,
     ) {}
 
+    /** @param array<string, mixed> $data */
     public static function fromArray(array $data): self
     {
         return new self(

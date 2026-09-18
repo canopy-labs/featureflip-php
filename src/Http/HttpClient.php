@@ -7,9 +7,19 @@ namespace Featureflip\Http;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
-use Featureflip\Logging\ErrorLogLogger;
-use Psr\Log\LoggerInterface;
 
+/**
+ * The SDK's own transport against the evaluation API: config fetches for the
+ * poller, analytics batches for the event processor. Constructed only by
+ * {@see \Featureflip\SharedFeatureflipCore}, which owns the credential and the
+ * redacting logger.
+ *
+ * @internal Not part of the public API. The 3.x changelog described this
+ *           class's surface without that caveat, so the marker is new even
+ *           though the status is not: nothing outside this package was ever
+ *           meant to construct it, and lastFailure() already returns the
+ *           @internal PostFailure. Use {@see \Featureflip\FeatureflipClient}.
+ */
 class HttpClient
 {
     /**
@@ -18,22 +28,33 @@ class HttpClient
      * CHANGELOG.md's newest heading by tools/check-sdk-versions (CI workflow
      * sdk-version-consistency.yml). Bump both together.
      */
-    private const VERSION = '3.3.0';
-
-    private LoggerInterface $logger;
+    private const VERSION = '3.4.0';
 
     /** Why the most recent post failed, for the caller to classify and report. */
     private ?PostFailure $lastFailure = null;
 
+    /**
+     * Deliberately takes no logger, unlike its sibling collaborators. Every
+     * failure this class can produce is already reported by whoever called it,
+     * and reporting here as well would duplicate the line rather than add one:
+     * post() records the reason on lastFailure() and returns false so the
+     * caller reports once per FLUSH rather than once per batch (#2258), and
+     * get() throws for SharedFeatureflipCore::refreshIfStale() to catch and
+     * warn about.
+     *
+     * It did accept a PSR-3 logger until 3.3.0, and stored it without ever
+     * reading it — so a caller who passed one got silence and no way to tell
+     * that from a quiet HTTP layer. PHP ignores surplus positional arguments
+     * to userland functions, so dropping the parameter only affects a caller
+     * passing it by name.
+     */
     public function __construct(
         private readonly ClientInterface $client,
         private readonly RequestFactoryInterface $requestFactory,
         private readonly StreamFactoryInterface $streamFactory,
         private readonly string $sdkKey,
         private readonly string $baseUrl,
-        ?LoggerInterface $logger = null,
     ) {
-        $this->logger = $logger ?? new ErrorLogLogger();
     }
 
     /**

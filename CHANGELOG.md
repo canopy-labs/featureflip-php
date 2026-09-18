@@ -1,5 +1,20 @@
 # Changelog
 
+<!-- RELEASE STEP: notes for an unreleased change go under an `## Unreleased`
+     heading here; releasing renames it to `## X.Y.Z — YYYY-MM-DD` and sets
+     HttpClient::VERSION to match. check-sdk-versions ties that constant to the
+     newest VERSION heading and skips an "Unreleased" one, so doing either half
+     alone fails the build. What it cannot see is a tag cut without touching
+     either file: the publish workflow takes the version from the tag, so the
+     notes would stay under "Unreleased" while that version ships. -->
+## 3.4.0 — 2026-09-18
+
+### Changed
+
+- `HttpClient` is marked `@internal`. Nothing outside the package was ever meant to construct it — `SharedFeatureflipCore` is its only caller, and `lastFailure()` already returned the `@internal` `PostFailure`, so a public method was handing back a type the package called private. The 3.x notes described this class's surface without that caveat, which is why the marker is worth calling out rather than slipping in: the status is not changing, the documentation of it is. Nothing changes at runtime, but editors and static analysers will flag uses of it from outside the package. Use `FeatureflipClient`.
+
+- `HttpClient`'s constructor no longer takes a PSR-3 `LoggerInterface`. It accepted one, stored it and never read it, so a caller who passed a logger got silence from the HTTP layer and no way to distinguish that from a quiet one. Logging here would have duplicated rather than added: `post()` records the reason on `lastFailure()` and returns false so the *caller* reports once per flush rather than once per batch, and `get()` throws for `SharedFeatureflipCore` to catch and report — the message reaches the log either way. PHP ignores surplus positional arguments to userland functions, so existing `new HttpClient(..., $logger)` keeps working; only a caller passing `logger:` as a named argument is affected.
+
 ## 3.3.0 — 2026-09-01
 
 ### Fixed

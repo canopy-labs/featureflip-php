@@ -14,6 +14,7 @@ final class Segment
         public readonly string $conditionLogic,
     ) {}
 
+    /** @param array<string, mixed> $data */
     public static function fromArray(array $data): self
     {
         // An unrecognised conditionLogic would fall to the AND arm in

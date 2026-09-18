@@ -8,7 +8,6 @@ use Featureflip\Http\HttpClient;
 use GuzzleHttp\Psr7\HttpFactory;
 use Psr\Http\Client\{ClientExceptionInterface, ClientInterface};
 use Psr\Http\Message\{RequestInterface, ResponseInterface};
-use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -94,7 +93,6 @@ final class HttpClientTest extends TestCase
             $factory,
             'sdk-key',
             'http://eval.test',
-            new NullLogger(),
         );
     }
 }

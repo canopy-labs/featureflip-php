@@ -339,7 +339,7 @@ final class ConditionEvaluator
             return null;
         }
 
-        $mm = $m[3];
+        $mm = $m[3] ?? '';
         $ss = ($m[4] ?? '') !== '' ? $m[4] : '00';
         $frac = $m[5] ?? '';
         $off = $m[6] ?? '';

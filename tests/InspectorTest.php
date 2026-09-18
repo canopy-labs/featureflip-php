@@ -192,12 +192,12 @@ final class InspectorTest extends TestCase
         $store->putAll($this->flags(), []);
 
         $coreRef = new \ReflectionClass(SharedFeatureflipCore::class);
-        $coreCtor = $coreRef->getConstructor();
+        $coreCtor = $coreRef->getMethod('__construct');
         $core = $coreRef->newInstanceWithoutConstructor();
         $coreCtor->invoke($core, $store, null, null, null, $inspectors);
 
         $clientRef = new \ReflectionClass(FeatureflipClient::class);
-        $clientCtor = $clientRef->getConstructor();
+        $clientCtor = $clientRef->getMethod('__construct');
         $client = $clientRef->newInstanceWithoutConstructor();
         $clientCtor->invoke($client, $core);
 
@@ -686,7 +686,7 @@ final class InspectorTest extends TestCase
 
         // The core is where filtering happens.
         $coreRef = new \ReflectionClass(SharedFeatureflipCore::class);
-        $coreCtor = $coreRef->getConstructor();
+        $coreCtor = $coreRef->getMethod('__construct');
         $core = $coreRef->newInstanceWithoutConstructor();
         $coreCtor->invoke($core, null, null, null, null, $config->inspectors);
 
@@ -800,7 +800,7 @@ final class InspectorTest extends TestCase
         $core = SharedFeatureflipCore::createForTesting(['dark-mode' => true], [$this->recorder($events)]);
 
         $clientRef = new \ReflectionClass(FeatureflipClient::class);
-        $clientCtor = $clientRef->getConstructor();
+        $clientCtor = $clientRef->getMethod('__construct');
 
         $first = $clientRef->newInstanceWithoutConstructor();
         $clientCtor->invoke($first, $core);

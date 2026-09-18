@@ -12,6 +12,7 @@ final class ConditionGroup
         public readonly array $conditions,
     ) {}
 
+    /** @param array<string, mixed> $data */
     public static function fromArray(array $data, string $path = 'conditionGroup'): self
     {
         // Same enum as Segment::conditionLogic, different carrier: this one lives on a

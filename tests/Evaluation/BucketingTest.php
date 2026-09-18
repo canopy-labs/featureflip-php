@@ -47,7 +47,11 @@ final class BucketingTest extends TestCase
     {
         $bucket = Bucketing::bucket('salt', 'value');
         $hash = md5('salt:value', true);
-        $expected = unpack('V', substr($hash, 0, 4))[1] % 100;
+        $unpacked = unpack('V', substr($hash, 0, 4));
+        if ($unpacked === false) {
+            self::fail('unpack() failed on a fixed 4-byte string');
+        }
+        $expected = $unpacked[1] % 100;
         $this->assertSame($expected, $bucket);
     }
 }

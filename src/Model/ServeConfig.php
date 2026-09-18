@@ -15,6 +15,7 @@ final class ServeConfig
         public readonly ?array $variations,
     ) {}
 
+    /** @param array<string, mixed> $data */
     public static function fromArray(array $data, string $path = 'serve'): self
     {
         // An unrecognised serve type would fall to the ROLLOUT arm in

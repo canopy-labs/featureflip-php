@@ -223,6 +223,7 @@ final class ConditionEvaluatorTest extends TestCase
     // lexical string compare ($value < $t), which disagrees with the engine on
     // timezone offsets, unix timestamps, and non-date strings.
 
+    /** @param array<int, string> $targets */
     private function assertDate(bool $expected, string $operator, string $value, array $targets): void
     {
         $condition = new Condition('ts', $operator, $targets, false);
@@ -323,6 +324,7 @@ final class ConditionEvaluatorTest extends TestCase
     // unconditionally otherwise, so "1.0" (string) keeps the lexical string path.
     //
     // @param int|float|bool|string $attribute
+    /** @param array<int, mixed> $values */
     private function assertNumericCoercion(bool $expected, string|int|float|bool $attribute, string $operator, array $values, bool $negate = false): void
     {
         $condition = new Condition('attr', $operator, $values, $negate);
@@ -566,6 +568,7 @@ final class ConditionEvaluatorTest extends TestCase
 
     // --- Semver operators (#1433, mirroring js-sdk/.NET SemverComparer) ---
 
+    /** @param array<int, string> $targets */
     private function assertSemver(bool $expected, string $operator, string $value, array $targets): void
     {
         $condition = new Condition('version', $operator, $targets, false);

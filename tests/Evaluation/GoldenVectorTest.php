@@ -37,6 +37,9 @@ final class GoldenVectorTest extends TestCase
     {
         $path = __DIR__ . '/../golden/vectors.json';
         $json = file_get_contents($path);
+        if ($json === false) {
+            throw new \RuntimeException("Unable to read golden vectors at {$path}");
+        }
         self::$vectors = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
     }
 

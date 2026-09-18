@@ -285,7 +285,7 @@ final class EventProcessor
             $parts[] = sprintf('dropped %d analytics event(s) still undelivered at shutdown', $discarded);
         }
 
-        $this->warn(implode('; ', $parts) . ': ' . ($failure?->message ?? 'delivery failed'));
+        $this->warn(implode('; ', $parts) . ': ' . ($failure->message ?? 'delivery failed'));
     }
 
     private function warn(string $message): void

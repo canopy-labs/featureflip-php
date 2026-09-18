@@ -270,7 +270,7 @@ final class Evaluator
         // deterministically. The engine assigns a random GUID per eval (spreading
         // anonymous users over HTTP); local SDK eval is deterministic, so parity is
         // guaranteed only for keyed contexts (#1457).
-        if ($bucketValue === '' && ($bucketBy === 'userId' || $bucketBy === 'user_id') && count($serve->variations) > 0) {
+        if ($bucketValue === '' && ($bucketBy === 'userId' || $bucketBy === 'user_id')) {
             return $serve->variations[0]->key;
         }
         $salt = $serve->salt ?? '';

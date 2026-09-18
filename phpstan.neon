@@ -1,0 +1,33 @@
+# Static analysis for the Featureflip PHP SDK.
+#
+# Level 8 is the tier that matches what the sibling SDKs already hold: the
+# Python SDK runs mypy with `strict = true`, and Go runs `go vet` plus a gofmt
+# and tidy check. Nothing enforced PHP until now, which is why the two entries
+# below existed unnoticed.
+#
+# The version range is the package's own supported matrix (composer requires
+# ^8.2, CI runs 8.2/8.3/8.4), so analysis reports anything that would break on
+# the floor as well as on the newest leg.
+parameters:
+    level: 8
+    paths:
+        - src
+        - tests
+    phpVersion:
+        min: 80200
+        max: 80400
+
+    ignoreErrors:
+        # False positive from cross-object aliasing PHPStan cannot model.
+        # refreshIfStale() early-returns on `!$this->store->isExpired()`, so
+        # PHPStan narrows isExpired() to true for the rest of the method and
+        # never invalidates it across `$this->poller->fetch()` — it cannot see
+        # that the poller writes the same FlagStore instance. The re-check is
+        # load-bearing: the poller declines to publish a response carrying no
+        # usable flags (#2258), and releasing the claim regardless would make
+        # every later evaluation retry a failing API inline. Do not "fix" this
+        # by deleting the branch.
+        -
+            identifier: booleanNot.alwaysFalse
+            path: src/SharedFeatureflipCore.php
+            count: 1

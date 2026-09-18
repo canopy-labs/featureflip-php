@@ -454,6 +454,7 @@ final class ReadOnlyCache implements \Psr\SimpleCache\CacheInterface
         return $this->inner->getMultiple($keys, $default);
     }
 
+    /** @param iterable<string, mixed> $values */
     public function setMultiple(iterable $values, null|int|\DateInterval $ttl = null): bool
     {
         return false;
@@ -507,6 +508,7 @@ final class RacyCache implements \Psr\SimpleCache\CacheInterface
         return $this->inner->getMultiple($keys, $default);
     }
 
+    /** @param iterable<string, mixed> $values */
     public function setMultiple(iterable $values, null|int|\DateInterval $ttl = null): bool
     {
         return $this->inner->setMultiple($values, $ttl);
