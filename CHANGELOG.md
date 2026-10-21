@@ -7,6 +7,12 @@
      alone fails the build. What it cannot see is a tag cut without touching
      either file: the publish workflow takes the version from the tag, so the
      notes would stay under "Unreleased" while that version ships. -->
+## 3.5.0 — 2026-10-20
+
+### Added
+
+- `wrapperName` and `wrapperVersion` on `Config`, for libraries that wrap this SDK, such as the OpenFeature provider. The wrapper's token follows the SDK's in the User-Agent on the flag fetch and the event post, e.g. `featureflip-php/<version> my-wrapper/1.0.0`, so usage through the wrapper can be counted. A name that is not a valid HTTP product token is ignored with a warning on the configured logger rather than failing construction. ([#4152](https://github.com/canopy-labs/featureflip/issues/4152))
+
 ## 3.4.0 — 2026-09-18
 
 ### Changed

@@ -28,7 +28,7 @@ class HttpClient
      * CHANGELOG.md's newest heading by tools/check-sdk-versions (CI workflow
      * sdk-version-consistency.yml). Bump both together.
      */
-    private const VERSION = '3.4.0';
+    private const VERSION = '3.5.0';
 
     /** Why the most recent post failed, for the caller to classify and report. */
     private ?PostFailure $lastFailure = null;
@@ -54,7 +54,34 @@ class HttpClient
         private readonly StreamFactoryInterface $streamFactory,
         private readonly string $sdkKey,
         private readonly string $baseUrl,
+        private readonly string $wrapper = '',
     ) {
+    }
+
+    /**
+     * The `name/version` token a wrapping library adds after the SDK's own in the
+     * User-Agent (#4152): `''` for no wrapper, or `null` when the name or version is
+     * not a valid RFC 9110 token. The caller logs the null case; this class takes no
+     * logger (see the constructor).
+     */
+    public static function wrapperToken(?string $name, ?string $version): ?string
+    {
+        if ($name === null || $name === '') {
+            return '';
+        }
+        $token = "/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/";
+        if (preg_match($token, $name) !== 1 || ($version !== null && $version !== '' && preg_match($token, $version) !== 1)) {
+            return null;
+        }
+
+        return $version === null || $version === '' ? $name : "{$name}/{$version}";
+    }
+
+    private function userAgent(): string
+    {
+        $sdk = 'featureflip-php/' . self::VERSION;
+
+        return $this->wrapper === '' ? $sdk : "{$sdk} {$this->wrapper}";
     }
 
     /**
@@ -64,7 +91,7 @@ class HttpClient
     {
         $request = $this->requestFactory->createRequest('GET', $this->baseUrl . $path)
             ->withHeader('Authorization', $this->sdkKey)
-            ->withHeader('User-Agent', 'featureflip-php/' . self::VERSION)
+            ->withHeader('User-Agent', $this->userAgent())
             ->withHeader('Accept', 'application/json');
 
         $response = $this->client->sendRequest($request);
@@ -110,7 +137,7 @@ class HttpClient
             $json = json_encode($body, JSON_THROW_ON_ERROR);
             $request = $this->requestFactory->createRequest('POST', $this->baseUrl . $path)
                 ->withHeader('Authorization', $this->sdkKey)
-                ->withHeader('User-Agent', 'featureflip-php/' . self::VERSION)
+                ->withHeader('User-Agent', $this->userAgent())
                 ->withHeader('Content-Type', 'application/json')
                 ->withBody($this->streamFactory->createStream($json));
 

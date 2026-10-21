@@ -34,6 +34,18 @@ final class Config
      *                                  which writes to PHP's error log; pass
      *                                  your application's PSR-3 logger to get
      *                                  these where you actually read them.
+     *
+     * @param ?string $wrapperName     Name of a library that wraps this SDK,
+     *                                  such as the OpenFeature provider. Sent
+     *                                  after the SDK's own token in the
+     *                                  User-Agent (`featureflip-php/<version>
+     *                                  my-wrapper/1.0.0`) so usage through the
+     *                                  wrapper can be counted. Must be a valid
+     *                                  HTTP product token; an invalid one is
+     *                                  ignored with a logged warning. Leave unset
+     *                                  when calling the SDK directly.
+     * @param ?string $wrapperVersion  Version of the wrapper named by
+     *                                  `$wrapperName`. Optional.
      */
     public function __construct(
         public readonly string $baseUrl = 'https://eval.featureflip.io',
@@ -46,5 +58,7 @@ final class Config
         public readonly ?StreamFactoryInterface $streamFactory = null,
         public readonly array $inspectors = [],
         public readonly ?LoggerInterface $logger = null,
+        public readonly ?string $wrapperName = null,
+        public readonly ?string $wrapperVersion = null,
     ) {}
 }

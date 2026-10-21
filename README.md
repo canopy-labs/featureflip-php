@@ -230,6 +230,8 @@ $client->identify(['user_id' => '123', 'email' => 'user@example.com', 'plan' => 
 $client->flush();
 ```
 
+Featureflip counts each event name, per environment. The metadata you pass is transmitted with the event but is not stored, and event counts are not surfaced in the app or API.
+
 ## Evaluation Inspectors
 
 Register callables on the config to observe every evaluation in-process — useful

@@ -81,12 +81,24 @@ final class SharedFeatureflipCore
         // in them (#2266).
         $logger = new RedactingLogger($config->logger ?? new ErrorLogLogger(), $sdkKey);
 
+        $wrapper = HttpClient::wrapperToken($config->wrapperName, $config->wrapperVersion);
+        if ($wrapper === null) {
+            // Dropped rather than thrown: identity metadata must never stop the client
+            // starting (#4152).
+            $logger->warning('Featureflip: ignoring wrapper {name}/{version}: not a valid User-Agent product token', [
+                'name' => $config->wrapperName,
+                'version' => $config->wrapperVersion,
+            ]);
+            $wrapper = '';
+        }
+
         $httpClient = new HttpClient(
             $config->httpClient,
             $config->requestFactory,
             $streamFactory,
             $sdkKey,
             rtrim($config->baseUrl, '/'),
+            $wrapper,
         );
 
         $store = new FlagStore(
