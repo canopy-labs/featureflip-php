@@ -6,6 +6,7 @@ namespace Featureflip\Tests\Evaluation;
 
 use Featureflip\Evaluation\Bucketing;
 use Featureflip\Evaluation\Evaluator;
+use Featureflip\Evaluation\UnbucketableWarnings;
 use Featureflip\EvaluationDetail;
 use Featureflip\Model\{Condition, ConditionGroup, Flag, Prerequisite, Rule, Segment, ServeConfig, Variation, WeightedVariation};
 use PHPUnit\Framework\TestCase;
@@ -17,6 +18,7 @@ final class EvaluatorTest extends TestCase
     protected function setUp(): void
     {
         $this->evaluator = new Evaluator();
+        UnbucketableWarnings::reset();
     }
 
     private function boolFlag(bool $enabled = true, ?string $offVariation = 'false'): Flag
@@ -158,29 +160,166 @@ final class EvaluatorTest extends TestCase
         $this->assertSame('FALLTHROUGH', $detail->reason);
     }
 
-    public function testKeylessRolloutServesControlVariation(): void
+    private function thinRollout(string $bucketBy = 'userId'): ServeConfig
     {
-        // Thin control weight (1) so an empty-string hash collapse would NOT land
-        // on "on"; the deterministic keyless guard must serve the control instead.
-        $flag = new Flag(
-            key: 'rollout-flag',
+        return new ServeConfig('Rollout', 'off', $bucketBy, 'test-salt', [
+            new WeightedVariation('on', 1),
+            new WeightedVariation('off', 99),
+        ]);
+    }
+
+    /** @param Rule[] $rules */
+    private function onOffFlag(string $key, ServeConfig $fallthrough, array $rules = [], bool $enabled = true): Flag
+    {
+        return new Flag(
+            key: $key,
+            version: 1,
+            type: 'boolean',
+            enabled: $enabled,
+            variations: [new Variation('on', true), new Variation('off', false), new Variation('fb', 'fb')],
+            rules: $rules,
+            fallthrough: $fallthrough,
+            offVariation: 'off',
+        );
+    }
+
+    public function testKeylessRolloutSkipsToFallthroughVariation(): void
+    {
+        // Thin control weight (1): the old behaviour served the first variation ("on")
+        // to every keyless caller. It must now serve the fallthrough's Variation.
+        $flag = $this->onOffFlag('unbucketable-fallthrough', $this->thinRollout());
+
+        for ($i = 0; $i < 20; $i++) {
+            $detail = $this->evaluator->evaluate($flag, [], []);
+            $this->assertSame('off', $detail->variationKey);
+            $this->assertFalse($detail->value);
+            $this->assertSame('FALLTHROUGH', $detail->reason);
+        }
+    }
+
+    public function testCustomBucketByMissingWithUserIdPresentFallsThrough(): void
+    {
+        $flag = $this->onOffFlag('unbucketable-custom', $this->thinRollout('anonymous_id'));
+
+        $detail = $this->evaluator->evaluate($flag, ['userId' => 'user-1'], []);
+        $this->assertSame('off', $detail->variationKey);
+        $this->assertSame('FALLTHROUGH', $detail->reason);
+    }
+
+    public function testKeylessRolloutRuleIsSkippedForNextRule(): void
+    {
+        $r1 = new Rule('r1', 1, [], $this->thinRollout(), null);
+        $r2 = new Rule('r2', 2, [], new ServeConfig('Fixed', 'fb', null, null, []), null);
+        $flag = $this->onOffFlag('unbucketable-next-rule', new ServeConfig('Fixed', 'off', null, null, []), [$r1, $r2]);
+
+        $detail = $this->evaluator->evaluate($flag, [], []);
+        $this->assertSame('fb', $detail->variationKey);
+        $this->assertSame('RULE_MATCH', $detail->reason);
+        $this->assertSame('r2', $detail->ruleId);
+    }
+
+    public function testEmptyStringBucketValueIsUnbucketableButZeroWhitespaceAndFalseBucket(): void
+    {
+        $flag = $this->onOffFlag('unbucketable-values', $this->thinRollout('k'));
+        $this->assertSame('off', $this->evaluator->evaluate($flag, ['k' => ''], [])->variationKey);
+        $this->assertSame('off', $this->evaluator->evaluate($flag, ['k' => null], [])->variationKey);
+
+        // These bucket: a weight-1 "on" slice vs 99 "off"; assert they reach the hash path
+        // by comparing to the Bucketing result directly.
+        foreach ([['0', '0'], [0, '0'], [' ', ' '], [true, '1'], [false, 'false']] as [$raw, $str]) {
+            $expected = Bucketing::bucket('test-salt', $str) < 1 ? 'on' : 'off';
+            $this->assertSame(
+                $expected,
+                $this->evaluator->evaluate($flag, ['k' => $raw], [])->variationKey,
+                'value ' . var_export($raw, true),
+            );
+        }
+    }
+
+    public function testRolloutWithoutVariationsKeylessDegradesNotSkips(): void
+    {
+        $r1 = new Rule('r1', 1, [], new ServeConfig('Rollout', 'on', 'userId', null, []), null);
+        $flag = $this->onOffFlag('unbucketable-degrade', new ServeConfig('Fixed', 'off', null, null, []), [$r1]);
+        $logger = new CollectingLogger();
+        $ev = new Evaluator($logger);
+
+        $detail = $ev->evaluate($flag, [], []);
+        $this->assertSame('on', $detail->variationKey);
+        $this->assertSame('RULE_MATCH', $detail->reason);
+        $this->assertSame([], $logger->messages);
+    }
+
+    public function testKeylessRolloutWarnsOncePerFlagRuleAndBucketByWithoutLeakingContext(): void
+    {
+        $r1 = new Rule('r1', 1, [], $this->thinRollout('anonymous_id'), null);
+        $flag = $this->onOffFlag('unbucketable-warn-once', new ServeConfig('Fixed', 'off', null, null, []), [$r1]);
+        $logger = new CollectingLogger();
+        $ev = new Evaluator($logger);
+
+        $ctx = ['email' => 'secret@example.com'];
+        $ev->evaluate($flag, $ctx, []);
+        $ev->evaluate($flag, $ctx, []);
+
+        $this->assertCount(1, $logger->messages);
+        $msg = $logger->messages[0];
+        $this->assertStringContainsString('unbucketable-warn-once', $msg);
+        $this->assertStringContainsString('rule r1', $msg);
+        $this->assertStringContainsString('anonymous_id', $msg);
+        $this->assertStringNotContainsString('secret@example.com', $msg);
+        $this->assertSame(
+            '[featureflip] Skipped the percentage rollout in flag "unbucketable-warn-once" (rule r1): '
+            . 'the context has no value for "anonymous_id". '
+            . 'Pass a stable id in that attribute to include this context in the rollout.',
+            $msg,
+        );
+    }
+
+    public function testFallthroughSkipWarnsOnceAsFallthrough(): void
+    {
+        $flag = $this->onOffFlag('unbucketable-warn-fallthrough', $this->thinRollout());
+        $logger = new CollectingLogger();
+        $ev = new Evaluator($logger);
+
+        $ev->evaluate($flag, [], []);
+        $ev->evaluate($flag, [], []);
+
+        $this->assertCount(1, $logger->messages);
+        $this->assertStringContainsString('(fallthrough)', $logger->messages[0]);
+    }
+
+    public function testDisabledFlagKeylessDoesNotWarn(): void
+    {
+        $flag = $this->onOffFlag('unbucketable-warn-disabled', $this->thinRollout(), [], false);
+        $logger = new CollectingLogger();
+        $ev = new Evaluator($logger);
+
+        $detail = $ev->evaluate($flag, [], []);
+        $this->assertSame('FLAG_DISABLED', $detail->reason);
+        $this->assertSame([], $logger->messages);
+    }
+
+    public function testKeylessRolloutInPrerequisiteFailsDependent(): void
+    {
+        $prereq = $this->onOffFlag('unbucketable-prereq', $this->thinRollout());
+        $dependent = new Flag(
+            key: 'unbucketable-dependent',
             version: 1,
             type: 'boolean',
             enabled: true,
             variations: [new Variation('on', true), new Variation('off', false)],
             rules: [],
-            fallthrough: new ServeConfig('Rollout', null, 'userId', 'test-salt', [
-                new WeightedVariation('on', 1),
-                new WeightedVariation('off', 99),
-            ]),
+            fallthrough: new ServeConfig('Fixed', 'on', null, null, []),
             offVariation: 'off',
+            prerequisites: [new Prerequisite('unbucketable-prereq', 'on')],
         );
 
-        for ($i = 0; $i < 20; $i++) {
-            $detail = $this->evaluator->evaluate($flag, [], []);
-            $this->assertTrue($detail->value, "iteration $i should serve the control variation 'on'");
-            $this->assertSame('FALLTHROUGH', $detail->reason);
-        }
+        $detail = $this->evaluator->evaluate(
+            $dependent,
+            [],
+            [],
+            ['unbucketable-prereq' => $prereq, 'unbucketable-dependent' => $dependent],
+        );
+        $this->assertSame('PREREQUISITE_FAILED', $detail->reason);
     }
 
     public function testRolloutServeWithNoVariationsServesDefault(): void
@@ -627,5 +766,99 @@ final class EvaluatorTest extends TestCase
             $expected = Bucketing::bucket('', $uid) < 50 ? 'on' : 'off';
             $this->assertSame($expected, $detail->variationKey, "empty-salt user $uid");
         }
+    }
+
+    public function testRuleServingUnknownVariationIsErrorWithoutRuleId(): void
+    {
+        $rule = new Rule('r1', 1, [], new ServeConfig('Fixed', 'nope', null, null, null), null);
+        $flag = $this->onOffFlag('unknown-rule-variation', new ServeConfig('Fixed', 'off', null, null, []), [$rule]);
+
+        $detail = $this->evaluator->evaluate($flag, ['userId' => 'u'], []);
+        $this->assertSame('ERROR', $detail->reason);
+        $this->assertSame('nope', $detail->variationKey);
+        $this->assertNull($detail->value);
+        $this->assertNull($detail->ruleId);
+    }
+
+    public function testFallthroughServingUnknownVariationIsError(): void
+    {
+        $flag = $this->onOffFlag('unknown-fall-variation', new ServeConfig('Fixed', 'nope', null, null, []), []);
+
+        $detail = $this->evaluator->evaluate($flag, ['userId' => 'u'], []);
+        $this->assertSame('ERROR', $detail->reason);
+        $this->assertSame('nope', $detail->variationKey);
+    }
+
+    public function testFloatBucketValueHashesAsItsCanonicalSpelling(): void
+    {
+        // (string) would spell these "0.3", "1.0E+21", "1.0E-7" (precision 14, PHP exponent form).
+        $cases = [
+            [0.30000000000000004, '0.30000000000000004'],
+            [1e21, '1e+21'],
+            [1e-7, '1e-7'],
+            [123456.78901234567, '123456.78901234567'],
+            [1.5e300, '1.5e+300'],
+            [0.1 + 0.7, '0.7999999999999999'],
+            [1.0, '1'],
+        ];
+        foreach ($cases as [$float, $spelled]) {
+            $flag = $this->onOffFlag(
+                'float-bucket',
+                new ServeConfig('Rollout', null, 'id', 'salt', [
+                    new \Featureflip\Model\WeightedVariation('on', 50),
+                    new \Featureflip\Model\WeightedVariation('off', 50),
+                ]),
+            );
+            $got = $this->evaluator->evaluate($flag, ['id' => $float], [])->variationKey;
+            $want = $this->evaluator->evaluate($flag, ['id' => $spelled], [])->variationKey;
+            $this->assertSame($want, $got, $spelled);
+        }
+    }
+
+    public function testDisabledFlagWithUnknownOffVariationIsError(): void
+    {
+        $detail = $this->evaluator->evaluate($this->boolFlag(enabled: false, offVariation: 'zzz'), ['user_id' => '1'], []);
+        $this->assertSame('ERROR', $detail->reason);
+        $this->assertSame('zzz', $detail->variationKey);
+        $this->assertNull($detail->value);
+    }
+
+    public function testFailedPrerequisiteWithUnknownOffVariationIsError(): void
+    {
+        $parent = $this->makeFlag(key: 'p', enabled: false);
+        $main = new Flag(
+            key: 'main',
+            version: 1,
+            type: 'boolean',
+            enabled: true,
+            variations: [new Variation('on', true), new Variation('off', false)],
+            rules: [],
+            fallthrough: new ServeConfig('Fixed', 'on', null, null, null),
+            offVariation: 'zzz',
+            prerequisites: [new Prerequisite('p', 'on')],
+        );
+        $detail = $this->evaluator->evaluate($main, ['user_id' => '1'], [], ['p' => $parent, 'main' => $main]);
+        $this->assertSame('ERROR', $detail->reason);
+        $this->assertSame('zzz', $detail->variationKey);
+        $this->assertNull($detail->value);
+    }
+
+    public function testDependentOfUnknownOffPrerequisiteIsErrorServingItsOwnOff(): void
+    {
+        $parent = new Flag(
+            key: 'p',
+            version: 1,
+            type: 'boolean',
+            enabled: false,
+            variations: [new Variation('on', true), new Variation('off', false)],
+            rules: [],
+            fallthrough: new ServeConfig('Fixed', 'on', null, null, null),
+            offVariation: 'zzz',
+        );
+        $main = $this->makeFlag(prerequisites: [new Prerequisite('p', 'on')]);
+        $detail = $this->evaluator->evaluate($main, ['user_id' => '1'], [], ['p' => $parent, 'main' => $main]);
+        $this->assertSame('ERROR', $detail->reason);
+        $this->assertSame('off', $detail->variationKey);
+        $this->assertFalse($detail->value);
     }
 }

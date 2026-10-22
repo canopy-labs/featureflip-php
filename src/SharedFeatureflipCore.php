@@ -54,7 +54,7 @@ final class SharedFeatureflipCore
         ?LoggerInterface $logger = null,
     ) {
         $this->logger = $logger ?? new ErrorLogLogger();
-        $this->evaluator = new Evaluator();
+        $this->evaluator = new Evaluator($this->logger);
         $this->store = $store;
         $this->eventProcessor = $eventProcessor;
         $this->poller = $poller;

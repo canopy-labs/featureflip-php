@@ -42,7 +42,7 @@ final class Flag
             type: $data['type'] ?? 'boolean',
             enabled: $data['enabled'] ?? false,
             variations: array_map(
-                fn(array $v) => new Variation(RequiredField::string($v, 'key', 'flag variation'), $v['value'] ?? null),
+                fn(array $v) => new Variation(RequiredField::keyAllowingEmpty($v, 'key', 'flag variation'), $v['value'] ?? null),
                 $data['variations'] ?? [],
             ),
             rules: array_map(

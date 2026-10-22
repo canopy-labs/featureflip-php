@@ -31,7 +31,7 @@ final class ServeConfig
             variations: isset($data['variations'])
                 ? array_map(
                     fn(array $v) => new WeightedVariation(
-                        RequiredField::string($v, 'key', 'weighted variation'),
+                        RequiredField::keyAllowingEmpty($v, 'key', 'weighted variation'),
                         RequiredField::int($v, 'weight', 'weighted variation'),
                     ),
                     $data['variations'],

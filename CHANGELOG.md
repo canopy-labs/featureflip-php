@@ -7,6 +7,16 @@
      alone fails the build. What it cannot see is a tag cut without touching
      either file: the publish workflow takes the version from the tag, so the
      notes would stay under "Unreleased" while that version ships. -->
+## 3.6.0 — 2026-10-22
+
+### Changed
+
+- A percentage rollout that can't bucket the context (no `user_id`, or no value for its bucket-by attribute) now skips the rule and evaluation continues with the next rule or the fallthrough. Previously the SDK served the rollout's first variation, which is the variation being rolled out. A warning is logged once per flag and rule. ([#4236](https://github.com/canopy-labs/featureflip/issues/4236))
+- Boolean values used as a rollout bucket value now hash as `true`/`false` (previously `1` and an empty string), matching the Evaluation API, so the same context gets the same variant in every SDK. Only a context whose user id is a boolean is affected. ([#4236](https://github.com/canopy-labs/featureflip/issues/4236))
+- Decimal numbers used as a rollout bucket value now hash in one canonical spelling shared with the Evaluation API (for example `1.0` hashes as `1`), so the same context gets the same variant in every SDK. Integer values are unchanged. A context whose user id is a non-integer number may get a different variant. ([#4236](https://github.com/canopy-labs/featureflip/issues/4236))
+- Malformed variation references now evaluate to reason `ERROR` the way the Evaluation API does. A rule or fallthrough that serves a key the flag doesn't define (the detail already reported `ERROR` and the default) no longer reports the rule id, and a served empty-string key with no empty-string variation is now an `ERROR` too. A flag whose prerequisite serves an undefined variation, or whose own off variation is undefined, now reports `ERROR` (still serving its off variation) instead of `PREREQUISITE_FAILED` or `FLAG_DISABLED`. A weighted rollout variation or a prerequisite's expected variation may now be keyed with the empty string, like a flag's own variations; previously such a flag was dropped as malformed. ([#4236](https://github.com/canopy-labs/featureflip/issues/4236))
+- A flag may now define a variation whose key is the empty string; previously the whole flag was dropped as malformed. ([#4236](https://github.com/canopy-labs/featureflip/issues/4236))
+
 ## 3.5.0 — 2026-10-20
 
 ### Added

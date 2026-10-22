@@ -27,4 +27,18 @@ final class PrerequisiteTest extends TestCase
         $this->assertSame('billing-enabled', $prereq->prerequisiteFlagKey);
         $this->assertSame('on', $prereq->expectedVariationKey);
     }
+
+    public function testFromArrayAcceptsAnEmptyExpectedVariationKey(): void
+    {
+        $prereq = Prerequisite::fromArray(['prerequisiteFlagKey' => 'p', 'expectedVariationKey' => '']);
+
+        $this->assertSame('', $prereq->expectedVariationKey);
+    }
+
+    public function testFromArrayRejectsANonStringExpectedVariationKey(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Prerequisite::fromArray(['prerequisiteFlagKey' => 'p', 'expectedVariationKey' => 5]);
+    }
 }

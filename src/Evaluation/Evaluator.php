@@ -6,16 +6,26 @@ namespace Featureflip\Evaluation;
 
 use Featureflip\EvaluationDetail;
 use Featureflip\Model\{Condition, ConditionGroup, Flag, Prerequisite, Rule, Segment, ServeConfig};
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class Evaluator
 {
     public const MAX_PREREQUISITE_DEPTH = 10;
 
-    private ConditionEvaluator $conditionEvaluator;
+    /**
+     * Returned by resolveVariationKey() when a Rollout serve cannot bucket the
+     * context. Distinct from null, which means "no variation key" (#4236).
+     */
+    private const UNBUCKETABLE = "\0unbucketable";
 
-    public function __construct()
+    private ConditionEvaluator $conditionEvaluator;
+    private LoggerInterface $logger;
+
+    public function __construct(?LoggerInterface $logger = null)
     {
         $this->conditionEvaluator = new ConditionEvaluator();
+        $this->logger = $logger ?? new NullLogger();
     }
 
     /**
@@ -144,8 +154,21 @@ final class Evaluator
         foreach ($rules as $rule) {
             if ($this->evaluateRule($rule, $context, $segments)) {
                 $variationKey = $this->resolveVariationKey($rule->serve, $context);
-                $value = $variationKey !== null ? $flag->getVariation($variationKey)?->value : null;
-                $result = new EvaluationDetail($value, 'RULE_MATCH', $rule->id, $variationKey);
+                if ($variationKey === self::UNBUCKETABLE) {
+                    // Can't bucket this context: the rule doesn't match; try the next one.
+                    UnbucketableWarnings::warn($this->logger, $flag->key, $rule->id, $rule->serve->bucketBy ?? 'userId');
+                    continue;
+                }
+                $variationKey ??= '';
+                $variation = $flag->getVariation($variationKey);
+                if ($variation === null) {
+                    // The served key names no variation: malformed config. Report ERROR (no
+                    // rule id) with the served key, like the engine's ServeVariation (#4236).
+                    $result = new EvaluationDetail(null, 'ERROR', null, $variationKey);
+                    $memo[$flag->key] = $result;
+                    return $result;
+                }
+                $result = new EvaluationDetail($variation->value, 'RULE_MATCH', $rule->id, $variationKey);
                 $memo[$flag->key] = $result;
                 return $result;
             }
@@ -153,8 +176,18 @@ final class Evaluator
 
         if ($flag->fallthrough !== null) {
             $variationKey = $this->resolveVariationKey($flag->fallthrough, $context);
-            $value = $variationKey !== null ? $flag->getVariation($variationKey)?->value : null;
-            $result = new EvaluationDetail($value, 'FALLTHROUGH', null, $variationKey);
+            if ($variationKey === self::UNBUCKETABLE) {
+                UnbucketableWarnings::warn($this->logger, $flag->key, null, $flag->fallthrough->bucketBy ?? 'userId');
+                $variationKey = $flag->fallthrough->variation;
+            }
+            $variationKey ??= '';
+            $variation = $flag->getVariation($variationKey);
+            if ($variation === null) {
+                $result = new EvaluationDetail(null, 'ERROR', null, $variationKey);
+                $memo[$flag->key] = $result;
+                return $result;
+            }
+            $result = new EvaluationDetail($variation->value, 'FALLTHROUGH', null, $variationKey);
             $memo[$flag->key] = $result;
             return $result;
         }
@@ -166,10 +199,13 @@ final class Evaluator
 
     private function serveOff(Flag $flag, string $reason, ?string $prerequisiteKey = null): EvaluationDetail
     {
-        $value = $flag->offVariation !== null
-            ? $flag->getVariation($flag->offVariation)?->value
-            : null;
-        return new EvaluationDetail($value, $reason, null, $flag->offVariation, $prerequisiteKey);
+        $variation = $flag->offVariation !== null ? $flag->getVariation($flag->offVariation) : null;
+        if ($variation === null) {
+            // An off variation the flag doesn't define is malformed config: report ERROR
+            // (no value, the key kept), like the engine's ServeVariation (#4236).
+            return new EvaluationDetail(null, 'ERROR', null, $flag->offVariation);
+        }
+        return new EvaluationDetail($variation->value, $reason, null, $flag->offVariation, $prerequisiteKey);
     }
 
     /**
@@ -239,6 +275,10 @@ final class Evaluator
     }
 
     /**
+     * Returns the served variation key, null when the serve names none, or
+     * {@see self::UNBUCKETABLE} when a Rollout serve can't bucket the context.
+     * Only Rollout serves can be unbucketable; a Fixed serve never is.
+     *
      * @param array<string, mixed> $context
      */
     private function resolveVariationKey(ServeConfig $serve, array $context): ?string
@@ -264,14 +304,21 @@ final class Evaluator
         } elseif ($bucketValue === null && $bucketBy === 'user_id') {
             $bucketValue = $context['userId'] ?? null;
         }
-        $bucketValue = $bucketValue !== null ? (string) $bucketValue : '';
-        // Keyless user contexts can't be bucketed. Rather than hashing the empty value
-        // into an arbitrary salt-dependent bucket, serve the control (first) variation
-        // deterministically. The engine assigns a random GUID per eval (spreading
-        // anonymous users over HTTP); local SDK eval is deterministic, so parity is
-        // guaranteed only for keyed contexts (#1457).
-        if ($bucketValue === '' && ($bucketBy === 'userId' || $bucketBy === 'user_id')) {
-            return $serve->variations[0]->key;
+        // A missing, null or exactly-empty value can't be bucketed, for any bucketBy.
+        // Whitespace, "0", 0 and false are real values and bucket normally. A bool hashes as the
+        // JSON's "true"/"false" ((string) true is "1" and (string) false is "", which would
+        // read as can't-bucket); every other value keeps the plain (string) cast (#4236).
+        // A float uses the canonical number spelling shared with the engine ((string) would use
+        // precision 14); integers keep their digits.
+        if (is_bool($bucketValue)) {
+            $bucketValue = $bucketValue ? 'true' : 'false';
+        } elseif (is_float($bucketValue)) {
+            $bucketValue = CanonicalNumber::format($bucketValue);
+        } else {
+            $bucketValue = (string) ($bucketValue ?? '');
+        }
+        if ($bucketValue === '') {
+            return self::UNBUCKETABLE;
         }
         $salt = $serve->salt ?? '';
         $bucket = Bucketing::bucket($salt, $bucketValue);

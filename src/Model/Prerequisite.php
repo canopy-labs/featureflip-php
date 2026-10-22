@@ -18,7 +18,7 @@ final class Prerequisite
     {
         return new self(
             prerequisiteFlagKey: RequiredField::string($data, 'prerequisiteFlagKey', 'prerequisite'),
-            expectedVariationKey: RequiredField::string($data, 'expectedVariationKey', 'prerequisite'),
+            expectedVariationKey: RequiredField::keyAllowingEmpty($data, 'expectedVariationKey', 'prerequisite'),
         );
     }
 }

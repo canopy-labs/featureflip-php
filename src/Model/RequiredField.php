@@ -33,6 +33,23 @@ final class RequiredField
     }
 
     /**
+     * Like {@see self::string()} but an empty string is a usable key: a flag may define a
+     * variation keyed "" and the engine serves it like any other (#4236).
+     *
+     * @param array<string, mixed> $data
+     */
+    public static function keyAllowingEmpty(array $data, string $key, string $context): string
+    {
+        $value = $data[$key] ?? null;
+
+        if (!is_string($value)) {
+            throw new \InvalidArgumentException($context . ' is missing a usable "' . $key . '"');
+        }
+
+        return $value;
+    }
+
+    /**
      * Accepts any numeric form. The evaluation API sends JSON integers, but
      * tolerating `50.0` or `"50"` costs nothing and drops a whole class of
      * spurious rejection.
