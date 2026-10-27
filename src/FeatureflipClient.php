@@ -125,6 +125,7 @@ final class FeatureflipClient
 
         $detail = $this->core->evaluateFlag($key, $context, $default);
         [$detail, $value] = $this->narrow($detail, is_bool(...), $default);
+        $this->core->recordEvaluation($key, $context, $detail);
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -141,6 +142,7 @@ final class FeatureflipClient
 
         $detail = $this->core->evaluateFlag($key, $context, $default);
         [$detail, $value] = $this->narrow($detail, is_string(...), $default);
+        $this->core->recordEvaluation($key, $context, $detail);
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -161,6 +163,7 @@ final class FeatureflipClient
             static fn (mixed $v): bool => is_int($v) || is_float($v),
             $default,
         );
+        $this->core->recordEvaluation($key, $context, $detail);
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -179,6 +182,7 @@ final class FeatureflipClient
 
         $detail = $this->core->evaluateFlag($key, $context, $default);
         [$detail, $value] = $this->narrow($detail, is_array(...), $default);
+        $this->core->recordEvaluation($key, $context, $detail);
         $this->notifyInspectors($key, $context, $detail, $value);
 
         return $value;
@@ -199,6 +203,7 @@ final class FeatureflipClient
         $detail = $this->core->evaluateFlag($key, $context, $default);
         // No type guard here — the caller gets the detail verbatim, so the
         // event reports the detail's own value.
+        $this->core->recordEvaluation($key, $context, $detail);
         $this->notifyInspectors($key, $context, $detail, $detail->value);
 
         return $detail;

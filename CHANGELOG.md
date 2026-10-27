@@ -7,6 +7,12 @@
      alone fails the build. What it cannot see is a tag cut without touching
      either file: the publish workflow takes the version from the tag, so the
      notes would stay under "Unreleased" while that version ships. -->
+## 3.7.0 — 2026-10-26
+
+### Changed
+
+- The `Evaluation` analytics event now carries the evaluation `reason` (`rule-match`, `fallthrough`, `flag-disabled`, `prerequisite-failed`, `error` or `flag-not-found`) and, for a rule match, the matching rule's `ruleId`, so the dashboard can show where flag traffic came from. A read that falls back to the default because the flag's type doesn't match the accessor is reported as `error`. The event also carries `prerequisiteKey` when a prerequisite failed, and no longer sends an empty `variation` when the flag wasn't found. ([#4268](https://github.com/canopy-labs/featureflip/issues/4268))
+
 ## 3.6.0 — 2026-10-22
 
 ### Changed

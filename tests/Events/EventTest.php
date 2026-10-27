@@ -17,6 +17,32 @@ final class EventTest extends TestCase
         $this->assertSame('Evaluation', $event->data['type']);
     }
 
+    public function testEvaluationEventMapsReasonsToKebabCaseAndNeverEmbedsTheRuleId(): void
+    {
+        $want = [
+            'RULE_MATCH' => 'rule-match',
+            'FALLTHROUGH' => 'fallthrough',
+            'FLAG_DISABLED' => 'flag-disabled',
+            'PREREQUISITE_FAILED' => 'prerequisite-failed',
+            'ERROR' => 'error',
+            'FLAG_NOT_FOUND' => 'flag-not-found',
+        ];
+
+        foreach ($want as $reason => $wire) {
+            $event = Event::evaluation('flag-1', ['user_id' => '1'], 'on', $reason, 'rule-9');
+            $this->assertSame($wire, $event->data['reason']);
+            $this->assertSame($reason === 'RULE_MATCH' ? 'rule-9' : null, $event->data['ruleId'] ?? null, $reason);
+        }
+    }
+
+    public function testEvaluationEventOmitsReasonAndRuleIdWhenAbsent(): void
+    {
+        $event = Event::evaluation('flag-1', ['user_id' => '1'], 'on');
+
+        $this->assertArrayNotHasKey('reason', $event->data);
+        $this->assertArrayNotHasKey('ruleId', $event->data);
+    }
+
     public function testCustomEventUsesPascalCaseType(): void
     {
         $event = Event::custom('purchase', ['user_id' => '123'], ['amount' => 10]);

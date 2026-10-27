@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Featureflip\Tests\Events;
 
 use Featureflip\Events\Event;
+use Featureflip\FeatureflipClient;
 use Featureflip\Events\EventProcessor;
 use Featureflip\Http\HttpClient;
 use PHPUnit\Framework\TestCase;
@@ -87,13 +88,17 @@ final class GoldenEventPayloadTest extends TestCase
 
             /** @var array<string, mixed> $context */
             $context = $v['context'];
-            $event = $v['kind'] === 'identify'
-                ? Event::identify($context)
-                // A vector with no `metadata` key omits the argument entirely, which
-                // must put the same bytes on the wire as an explicitly empty bag.
-                : Event::custom($v['eventKey'], $context, $v['metadata'] ?? []);
+            if ($v['kind'] === 'evaluation') {
+                $captured = $this->evaluateThroughClient($v);
+            } else {
+                $event = $v['kind'] === 'identify'
+                    ? Event::identify($context)
+                    // A vector with no `metadata` key omits the argument entirely, which
+                    // must put the same bytes on the wire as an explicitly empty bag.
+                    : Event::custom($v['eventKey'], $context, $v['metadata'] ?? []);
 
-            $captured = $this->postThrough($event);
+                $captured = $this->postThrough($event);
+            }
 
             $this->assertCount(1, $captured, $v['id']);
             $sent = $captured[0];
@@ -115,7 +120,32 @@ final class GoldenEventPayloadTest extends TestCase
         }
 
         // A runner that silently skips everything is worse than no runner at all.
-        $this->assertGreaterThanOrEqual(13, $executed);
+        $this->assertGreaterThanOrEqual(19, $executed);
+    }
+
+    /**
+     * Runs an `evaluation` vector through a REAL client (forTesting() bypasses
+     * analytics) fed the vector's snapshot, and returns the events exactly as
+     * they were serialized for POST /v1/sdk/events.
+     *
+     * @param array<string, mixed> $v
+     * @return list<array<string, mixed>>
+     */
+    private function evaluateThroughClient(array $v): array
+    {
+        $api = new CapturingEvalApi($v['flags'], $v['segments']);
+        FeatureflipClient::resetForTesting();
+
+        try {
+            $client = $api->client();
+            $client->boolVariation($v['flagKey'], $v['context'], false);
+            $client->flush();
+            $client->close();
+        } finally {
+            FeatureflipClient::resetForTesting();
+        }
+
+        return $api->events;
     }
 
     /**

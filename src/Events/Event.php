@@ -15,16 +15,45 @@ final class Event
     ) {}
 
     /**
+     * Kebab-case wire spelling of each evaluator reason, shared with every other
+     * SDK and the Evaluation API so a source reads the same whichever SDK sent
+     * it (#4268). The SCREAMING_SNAKE names stay the public EvaluationDetail API.
+     */
+    private const WIRE_REASONS = [
+        'RULE_MATCH' => 'rule-match',
+        'FALLTHROUGH' => 'fallthrough',
+        'FLAG_DISABLED' => 'flag-disabled',
+        'PREREQUISITE_FAILED' => 'prerequisite-failed',
+        'ERROR' => 'error',
+        'FLAG_NOT_FOUND' => 'flag-not-found',
+    ];
+
+    /**
+     * `reason` and `ruleId` are omitted when absent. `ruleId` rides only on a
+     * RULE_MATCH: an ERROR read can still carry the rule that selected a
+     * malformed variation, and that rule did not serve the traffic.
+     *
      * @param array<string, mixed> $context
      */
-    public static function evaluation(string $flagKey, array $context, ?string $variationKey): self
-    {
+    public static function evaluation(
+        string $flagKey,
+        array $context,
+        ?string $variationKey,
+        ?string $reason = null,
+        ?string $ruleId = null,
+        ?string $prerequisiteKey = null,
+    ): self {
+        $wireReason = $reason === null ? null : (self::WIRE_REASONS[$reason] ?? null);
+
         return new self('Evaluation', self::compactPayload([
             'type' => 'Evaluation',
             'flagKey' => $flagKey,
             'userId' => self::userId($context),
-            'variation' => $variationKey ?? '',
+            'variation' => $variationKey,
             'timestamp' => self::nowUtc(),
+            'prerequisiteKey' => $prerequisiteKey,
+            'reason' => $wireReason,
+            'ruleId' => $reason === 'RULE_MATCH' ? $ruleId : null,
         ]));
     }
 
@@ -161,6 +190,12 @@ final class Event
     {
         if (($data['userId'] ?? null) === null) {
             unset($data['userId']);
+        }
+
+        foreach (['variation', 'prerequisiteKey', 'reason', 'ruleId'] as $optional) {
+            if (array_key_exists($optional, $data) && $data[$optional] === null) {
+                unset($data[$optional]);
+            }
         }
 
         if (empty($data['metadata'])) {

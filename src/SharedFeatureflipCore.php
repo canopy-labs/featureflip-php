@@ -357,9 +357,6 @@ final class SharedFeatureflipCore
             $detail = new EvaluationDetail($default, 'ERROR');
         }
 
-        // Track evaluation event
-        $this->eventProcessor?->push(Event::evaluation($key, $context, $detail->variationKey));
-
         if ($detail->reason === 'FLAG_NOT_FOUND') {
             return new EvaluationDetail($default, $detail->reason, $detail->ruleId, $detail->variationKey);
         }
@@ -385,6 +382,29 @@ final class SharedFeatureflipCore
         }
 
         return $detail;
+    }
+
+    /**
+     * Queue the `Evaluation` analytics event for one completed variation call.
+     *
+     * Called by FeatureflipClient's accessors after their type guard, never by
+     * evaluateFlag(): a type-mismatched read is reported as ERROR to the caller,
+     * and the event must carry that same reason rather than the served one.
+     *
+     * @internal
+     *
+     * @param array<string, mixed> $context
+     */
+    public function recordEvaluation(string $key, array $context, EvaluationDetail $detail): void
+    {
+        $this->eventProcessor?->push(Event::evaluation(
+            $key,
+            $context,
+            $detail->variationKey,
+            $detail->reason,
+            $detail->ruleId,
+            $detail->prerequisiteKey,
+        ));
     }
 
     /**
