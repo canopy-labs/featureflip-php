@@ -206,6 +206,31 @@ final class EvaluatorTest extends TestCase
         $this->assertSame('FALLTHROUGH', $detail->reason);
     }
 
+    /** @return array<string, array{mixed}> */
+    public static function nonScalarBucketValues(): array
+    {
+        return [
+            'list' => [['a', 'b']],
+            'empty array' => [[]],
+            'assoc array' => [['id' => 'acme']],
+            'stdClass' => [(object) ['id' => 'acme']],
+            'empty stdClass' => [new \stdClass()],
+        ];
+    }
+
+    /** #4572: a non-scalar can't be bucketed, so the rule is skipped for the next one. */
+    #[\PHPUnit\Framework\Attributes\DataProvider('nonScalarBucketValues')]
+    public function testNonScalarBucketValueSkipsRule(mixed $value): void
+    {
+        $r1 = new Rule('r1', 1, [], $this->thinRollout('groups'), null);
+        $r2 = new Rule('r2', 2, [], new ServeConfig('Fixed', 'fb', null, null, []), null);
+        $flag = $this->onOffFlag('unbucketable-non-scalar', new ServeConfig('Fixed', 'off', null, null, []), [$r1, $r2]);
+
+        $detail = $this->evaluator->evaluate($flag, ['user_id' => 'u1', 'groups' => $value], []);
+        $this->assertSame('fb', $detail->variationKey);
+        $this->assertSame('r2', $detail->ruleId);
+    }
+
     public function testKeylessRolloutRuleIsSkippedForNextRule(): void
     {
         $r1 = new Rule('r1', 1, [], $this->thinRollout(), null);

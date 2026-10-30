@@ -156,7 +156,7 @@ final class Evaluator
                 $variationKey = $this->resolveVariationKey($rule->serve, $context);
                 if ($variationKey === self::UNBUCKETABLE) {
                     // Can't bucket this context: the rule doesn't match; try the next one.
-                    UnbucketableWarnings::warn($this->logger, $flag->key, $rule->id, $rule->serve->bucketBy ?? 'userId');
+                    UnbucketableWarnings::warn($this->logger, $flag->key, $rule->id, $rule->serve->bucketBy ?? 'user_id');
                     continue;
                 }
                 $variationKey ??= '';
@@ -177,7 +177,7 @@ final class Evaluator
         if ($flag->fallthrough !== null) {
             $variationKey = $this->resolveVariationKey($flag->fallthrough, $context);
             if ($variationKey === self::UNBUCKETABLE) {
-                UnbucketableWarnings::warn($this->logger, $flag->key, null, $flag->fallthrough->bucketBy ?? 'userId');
+                UnbucketableWarnings::warn($this->logger, $flag->key, null, $flag->fallthrough->bucketBy ?? 'user_id');
                 $variationKey = $flag->fallthrough->variation;
             }
             $variationKey ??= '';
@@ -296,20 +296,20 @@ final class Evaluator
             return $serve->variation;
         }
 
-        $bucketBy = $serve->bucketBy ?? 'userId';
-        $bucketValue = $context[$bucketBy] ?? null;
-        // Alias "userId" <-> "user_id" for the built-in user identifier
-        if ($bucketValue === null && $bucketBy === 'userId') {
-            $bucketValue = $context['user_id'] ?? null;
-        } elseif ($bucketValue === null && $bucketBy === 'user_id') {
-            $bucketValue = $context['userId'] ?? null;
-        }
+        $bucketBy = $serve->bucketBy ?? 'user_id';
+        // "user_id" and "userId" resolve the same identity (user_id first).
+        $bucketValue = ContextAttribute::resolve($context, $bucketBy);
         // A missing, null or exactly-empty value can't be bucketed, for any bucketBy.
         // Whitespace, "0", 0 and false are real values and bucket normally. A bool hashes as the
         // JSON's "true"/"false" ((string) true is "1" and (string) false is "", which would
         // read as can't-bucket); every other value keeps the plain (string) cast (#4236).
         // A float uses the canonical number spelling shared with the engine ((string) would use
         // precision 14); integers keep their digits.
+        // An array, or an object that is not Stringable (a decoded JSON array or object, empty
+        // or not), has no spelling every SDK shares, so it can't be bucketed (#4572).
+        if (is_array($bucketValue) || (is_object($bucketValue) && !($bucketValue instanceof \Stringable))) {
+            return self::UNBUCKETABLE;
+        }
         if (is_bool($bucketValue)) {
             $bucketValue = $bucketValue ? 'true' : 'false';
         } elseif (is_float($bucketValue)) {

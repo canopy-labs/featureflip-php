@@ -24,11 +24,10 @@ final class ConditionEvaluator
         // absent" → return negate. Never coerce null to "" and run the operator
         // (#1460): the engine filters null attributes in ClientContextMapper and
         // every other SDK short-circuits on null, so PHP must too.
-        if (!array_key_exists($condition->attribute, $context) || $context[$condition->attribute] === null) {
+        $raw = ContextAttribute::resolve($context, $condition->attribute);
+        if ($raw === null) {
             return $condition->negate;
         }
-
-        $raw = $context[$condition->attribute];
 
         // Type-aware numeric coercion for equality/membership operators (#1458).
         // When the RAW attribute is a native int or float — NOT a bool (is_int /

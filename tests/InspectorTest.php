@@ -341,8 +341,16 @@ final class InspectorTest extends TestCase
         $events = [];
         $client = $this->makeClient([$this->recorder($events)]);
 
-        // stdClass has no __toString, so Rollout bucketing's (string) cast throws.
-        $detail = $client->variationDetail('flag-rollout', ['userId' => new \stdClass()], true);
+        // Rollout bucketing casts a Stringable bucket value with (string), and this one throws.
+        // (A plain stdClass no longer reaches the cast: it is a non-scalar, which can't be
+        // bucketed, #4572.)
+        $throwing = new class implements \Stringable {
+            public function __toString(): string
+            {
+                throw new \RuntimeException('boom');
+            }
+        };
+        $detail = $client->variationDetail('flag-rollout', ['userId' => $throwing], true);
 
         $this->assertTrue($detail->value, 'caller receives its own default');
         $this->assertSame('ERROR', $detail->reason);

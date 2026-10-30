@@ -111,11 +111,10 @@ final class Event
      *    (`context.user_id ?? context.userId`), and note that a *present* null
      *    falls through to the alias while a present-but-falsy value does not.
      *
-     *    The two resolutions are independent and can disagree: the evaluator
-     *    reads whichever key `serve.bucketBy` names — defaulting to `userId` —
-     *    before falling back, so a context setting BOTH keys to different
-     *    values buckets on `userId` and attributes to `user_id`. That mirrors
-     *    the JS SDK exactly; don't "align" one half without the other.
+     *    Evaluation and event attribution now resolve the same way: both read
+     *    `user_id` first, then `userId` (the shared `ContextAttribute` rule), so
+     *    a context setting BOTH keys to different values buckets and attributes
+     *    to `user_id`.
      *
      * @param array<string, mixed> $context
      */

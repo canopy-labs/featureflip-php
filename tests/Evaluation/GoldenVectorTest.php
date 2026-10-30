@@ -20,6 +20,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class GoldenVectorTest extends TestCase
 {
+    private const SUPPORTED_CAPABILITIES = ['mapContext', 'exactCaseIdentity'];
+
     /** @var array<string, mixed> */
     private static array $vectors;
 
@@ -176,7 +178,14 @@ final class GoldenVectorTest extends TestCase
     public function testFlagVectors(): void
     {
         $ev = new Evaluator();
+        $executed = 0;
         foreach (self::$vectors['flagVectors'] as $v) {
+            // PHP is a map-context SDK that keeps the caller's identifier casing,
+            // so it runs every vector; an unknown capability token is skipped.
+            if (array_diff($v['requires'] ?? [], self::SUPPORTED_CAPABILITIES) !== []) {
+                continue;
+            }
+            $executed++;
             // Build flag map keyed by flag key.
             $allFlags = [];
             foreach ($v['flags'] as $f) {
@@ -190,11 +199,16 @@ final class GoldenVectorTest extends TestCase
                 $segments[$seg->key] = $seg;
             }
 
-            // Flatten context: userId at the top level + attributes merged in.
-            $ctx = array_merge(
-                ['userId' => $v['context']['userId'] ?? null],
-                $v['context']['attributes'] ?? [],
-            );
+            if (array_key_exists('wireContext', $v)) {
+                // A wireContext map is the caller's raw context, passed through verbatim.
+                $ctx = $v['wireContext'];
+            } else {
+                // Flatten context: userId at the top level + attributes merged in.
+                $ctx = array_merge(
+                    ['userId' => $v['context']['userId'] ?? null],
+                    $v['context']['attributes'] ?? [],
+                );
+            }
 
             $detail = $ev->evaluate($allFlags[$v['flagKey']], $ctx, $segments, $allFlags);
             $exp    = $v['expected'];
@@ -216,5 +230,8 @@ final class GoldenVectorTest extends TestCase
             }
             $this->assertEquals($exp['reason'], $reason, $v['id']);
         }
+
+        $this->assertSame(count(self::$vectors['flagVectors']), $executed, 'a flag vector was skipped');
+        $this->assertGreaterThanOrEqual(71, $executed);
     }
 }

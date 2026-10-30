@@ -7,6 +7,12 @@
      alone fails the build. What it cannot see is a tag cut without touching
      either file: the publish workflow takes the version from the tag, so the
      notes would stay under "Unreleased" while that version ships. -->
+## 3.7.1 — 2026-10-30
+
+### Fixed
+
+- `user_id` is now the canonical user-identifier spelling, with `userId` accepted as an alias. A targeting condition on `user_id` or `userId` now resolves the same identity for either spelling (`user_id` first, then `userId`), where a condition on `user_id` used to miss a context that only set `userId`. A context that sets both spellings now buckets on `user_id`, and a rollout with no Bucket by defaults to `user_id`. ([#4518](https://github.com/canopy-labs/featureflip/issues/4518))
+
 ## 3.7.0 — 2026-10-26
 
 ### Changed
