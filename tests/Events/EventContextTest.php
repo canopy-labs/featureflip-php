@@ -7,7 +7,7 @@ namespace Featureflip\Tests\Events;
 use Featureflip\Events\{Event, EventProcessor};
 use Featureflip\FeatureflipClient;
 use Featureflip\Http\HttpClient;
-use Featureflip\Model\{Flag, ServeConfig, Variation};
+use Featureflip\Model\{Flag, ServeConfig, Variation, WeightedVariation};
 use Featureflip\SharedFeatureflipCore;
 use Featureflip\Store\FlagStore;
 use PHPUnit\Framework\TestCase;
@@ -201,6 +201,53 @@ final class EventContextTest extends TestCase
         $this->assertSame('', $event->data['userId']);
     }
 
+    /**
+     * A Stringable whose __toString() throws is the same caller mistake as a
+     * non-stringable value, but the instanceof check let it through to an
+     * unguarded cast (#5541).
+     */
+    public function testEvaluationEventDoesNotThrowWhenToStringThrows(): void
+    {
+        $event = Event::evaluation('flag-1', ['user_id' => self::throwingStringable()], 'on');
+
+        $this->assertSame('', $event->data['userId']);
+    }
+
+    public function testCustomEventDoesNotThrowWhenToStringThrows(): void
+    {
+        $event = Event::custom('purchase', ['user_id' => self::throwingStringable()], ['amount' => 10]);
+
+        $this->assertSame('', $event->data['userId']);
+    }
+
+    public function testIdentifyEventDoesNotThrowWhenToStringThrows(): void
+    {
+        $event = Event::identify(['user_id' => self::throwingStringable()]);
+
+        $this->assertSame('', $event->data['userId']);
+    }
+
+    public function testAThrowingToStringIsLoggedWithoutItsMessage(): void
+    {
+        $log = tempnam(sys_get_temp_dir(), 'ff-log-');
+        $previous = ini_set('error_log', $log);
+
+        try {
+            Event::evaluation('flag-1', ['user_id' => self::throwingStringable()], 'on');
+        } finally {
+            ini_set('error_log', (string) $previous);
+        }
+
+        $contents = (string) file_get_contents($log);
+        unlink($log);
+
+        $this->assertStringContainsString('[featureflip]', $contents);
+        $this->assertStringContainsString('RuntimeException', $contents);
+        // The exception message is the host's own text and may carry anything
+        // (an email, a token); the diagnostic names only the types.
+        $this->assertStringNotContainsString('boom-secret', $contents);
+    }
+
     // --- The regression proper: nothing escapes into the host -------------
 
     public function testBoolVariationDoesNotThrowWhenContextValueIsNotStringable(): void
@@ -239,7 +286,62 @@ final class EventContextTest extends TestCase
         $this->assertSame('', $this->lastQueuedUserId());
     }
 
+    public function testBoolVariationDoesNotThrowWhenToStringThrows(): void
+    {
+        $client = $this->makeLiveClient();
+
+        $this->assertTrue($client->boolVariation('flag-on', ['user_id' => self::throwingStringable()], false));
+        $this->assertSame('', $this->lastQueuedUserId());
+    }
+
+    public function testTrackDoesNotThrowWhenToStringThrows(): void
+    {
+        $client = $this->makeLiveClient();
+
+        $client->track('checkout-completed', ['user_id' => self::throwingStringable()], ['total' => 99.99]);
+
+        $this->assertSame(1, $this->processor->queueSize());
+        $this->assertSame('', $this->lastQueuedUserId());
+    }
+
+    public function testIdentifyDoesNotThrowWhenToStringThrows(): void
+    {
+        $client = $this->makeLiveClient();
+
+        $client->identify(['user_id' => self::throwingStringable(), 'plan' => 'pro']);
+
+        $this->assertSame(1, $this->processor->queueSize());
+        $this->assertSame('', $this->lastQueuedUserId());
+    }
+
+    /**
+     * The evaluator casts the same value when a Rollout serve buckets on it.
+     * That cast sits inside evaluateFlag()'s fail-safe guard, so the read
+     * degrades to the default with ERROR; the event built after it must not
+     * then throw on the same context (#5541).
+     */
+    public function testRolloutBucketingOnAThrowingToStringFailsSafe(): void
+    {
+        $client = $this->makeLiveClient();
+
+        $detail = $client->variationDetail('flag-rollout', ['user_id' => self::throwingStringable()], false);
+
+        $this->assertFalse($detail->value);
+        $this->assertSame('ERROR', $detail->reason);
+        $this->assertSame('', $this->lastQueuedUserId());
+    }
+
     // --- Fixtures ---------------------------------------------------------
+
+    private static function throwingStringable(): \Stringable
+    {
+        return new class () implements \Stringable {
+            public function __toString(): string
+            {
+                throw new \RuntimeException('boom-secret');
+            }
+        };
+    }
 
     /**
      * The userId actually carried by the most recently queued event — proves the
@@ -270,6 +372,19 @@ final class EventContextTest extends TestCase
                 variations: [new Variation('on', true), new Variation('off', false)],
                 rules: [],
                 fallthrough: new ServeConfig('Fixed', 'on', null, null, null),
+                offVariation: 'off',
+            ),
+            new Flag(
+                key: 'flag-rollout',
+                version: 1,
+                type: 'boolean',
+                enabled: true,
+                variations: [new Variation('on', true), new Variation('off', false)],
+                rules: [],
+                fallthrough: new ServeConfig('Rollout', 'off', 'user_id', 'salt', [
+                    new WeightedVariation('on', 50),
+                    new WeightedVariation('off', 50),
+                ]),
                 offVariation: 'off',
             ),
         ], []);

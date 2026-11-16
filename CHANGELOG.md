@@ -7,6 +7,16 @@
      alone fails the build. What it cannot see is a tag cut without touching
      either file: the publish workflow takes the version from the tag, so the
      notes would stay under "Unreleased" while that version ships. -->
+## 3.7.2 — 2026-11-16
+
+### Security
+
+- The SDK key is now redacted from the PSR-3 context array as well as the message, including an `exception` context value whose message quotes the key. The evaluator and inspector error guards now log through the SDK's redacting logger instead of calling `error_log()` directly.
+
+### Fixed
+
+- A context `user_id` whose `__toString()` throws no longer escapes `boolVariation()` and the other typed reads, `track()` or `identify()`. The event now carries an empty `userId` and the SDK logs the value's type and the exception's class, never its message.
+
 ## 3.7.1 — 2026-10-30
 
 ### Fixed

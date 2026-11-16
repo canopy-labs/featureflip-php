@@ -96,8 +96,9 @@ final class Event
      * Two rules, both load-bearing:
      *
      * 1. Never throw. A bare `(string)` cast raises \Error for an object with
-     *    no __toString and a warning for an array — and warnings are promoted
-     *    to ErrorException by Symfony's and Laravel's default error handlers.
+     *    no __toString, a warning for an array — and warnings are promoted
+     *    to ErrorException by Symfony's and Laravel's default error handlers —
+     *    and whatever a caller's own __toString() throws (#5541).
      *    Event construction happens after the evaluator's fail-safe guard in
      *    SharedFeatureflipCore::evaluateFlag(), and track()/identify() reach it
      *    with no guard at all, so anything thrown here lands in the host
@@ -136,7 +137,7 @@ final class Event
             return (string) $value->value;
         }
 
-        if (is_scalar($value) || $value instanceof \Stringable) {
+        if (is_scalar($value)) {
             return (string) $value;
         }
 
@@ -144,6 +145,25 @@ final class Event
         // blank-attributed analytics and no idea why. Every other degradation
         // in this SDK logs (SharedFeatureflipCore's evaluator and inspector
         // guards); this one does too, in the same format.
+        if ($value instanceof \Stringable) {
+            // Being Stringable only promises a __toString(), not one that
+            // returns: a throwing one escaped every entry point the same way a
+            // non-stringable value did before #2259 (#5541). Only the types are
+            // logged — the exception message is the host's own text and may
+            // carry anything.
+            try {
+                return (string) $value;
+            } catch (\Throwable $e) {
+                error_log(
+                    '[featureflip] evaluation context user identifier ('
+                    . get_debug_type($value) . ') threw ' . get_debug_type($e)
+                    . ' from __toString(); the event will carry an empty userId'
+                );
+
+                return '';
+            }
+        }
+
         error_log(
             '[featureflip] evaluation context user identifier is not stringable ('
             . get_debug_type($value) . '); the event will carry an empty userId'

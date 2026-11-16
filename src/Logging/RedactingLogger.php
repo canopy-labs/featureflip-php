@@ -54,12 +54,92 @@ final class RedactingLogger extends AbstractLogger
      */
     public function log($level, string|\Stringable $message, array $context = []): void
     {
-        $text = (string) $message;
+        $text = $this->redact((string) $message);
 
-        if (strlen($this->secret) >= self::MIN_REDACTABLE_LENGTH) {
-            $text = str_replace($this->secret, self::REPLACEMENT, $text);
+        foreach ($context as $name => $value) {
+            $context[$name] = $this->redactValue($value);
         }
 
         $this->inner->log($level, $text, $context);
+    }
+
+    private function active(): bool
+    {
+        return strlen($this->secret) >= self::MIN_REDACTABLE_LENGTH;
+    }
+
+    private function redact(string $text): string
+    {
+        return $this->active() ? str_replace($this->secret, self::REPLACEMENT, $text) : $text;
+    }
+
+    /**
+     * PSR-3 context values reach the host's sink too (`['exception' => $e]` is
+     * the convention). Strings are redacted; a Throwable that quotes the key in
+     * its message, any `previous` link, or its trace is replaced by a
+     * RuntimeException carrying the redacted "Class: message" (and a redacted
+     * previous chain), since an exception cannot be rewritten in place. Clean
+     * Throwables pass through by identity.
+     */
+    private function redactValue(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return $this->redact($value);
+        }
+
+        if (is_array($value)) {
+            return array_map($this->redactValue(...), $value);
+        }
+
+        if ($value instanceof \Throwable && $this->active() && $this->isDirty($value)) {
+            return $this->substitute($value);
+        }
+
+        return $value;
+    }
+
+    private function isDirty(\Throwable $e): bool
+    {
+        for (; $e !== null; $e = $e->getPrevious()) {
+            if (
+                str_contains($e->getMessage(), $this->secret)
+                || $this->traceHoldsSecret($e->getTrace())
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Trace args are only present when `zend.exception_ignore_args=0`. The
+     * string rendering truncates args, so walk the raw frames instead.
+     *
+     * @param array<mixed> $frames
+     */
+    private function traceHoldsSecret(array $frames): bool
+    {
+        foreach ($frames as $value) {
+            if (is_string($value) && str_contains($value, $this->secret)) {
+                return true;
+            }
+            if (is_array($value) && $this->traceHoldsSecret($value)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function substitute(\Throwable $e): \RuntimeException
+    {
+        $previous = $e->getPrevious();
+
+        return new \RuntimeException(
+            $this->redact($e::class . ': ' . $e->getMessage()),
+            0,
+            $previous === null ? null : $this->substitute($previous),
+        );
     }
 }

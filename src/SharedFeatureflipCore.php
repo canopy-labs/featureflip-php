@@ -236,6 +236,16 @@ final class SharedFeatureflipCore
         }
     }
 
+    /** {@see warn()}, at error level: the evaluator and inspector guards must never throw either. */
+    private function fail(string $message): void
+    {
+        try {
+            $this->logger->error($message);
+        } catch (\Throwable) {
+            // Nowhere left to report to.
+        }
+    }
+
     /**
      * Whether a flag configuration has been loaded.
      *
@@ -353,7 +363,7 @@ final class SharedFeatureflipCore
             // flags exist to avoid, and every other server SDK degrades here.
             // The error is logged (not swallowed silently) and the ERROR-reason
             // inspector event downstream preserves observability.
-            error_log('[featureflip] flag evaluation threw for "' . $key . '": ' . $e->getMessage());
+            $this->fail('flag evaluation threw for "' . $key . '": ' . $e->getMessage());
             $detail = new EvaluationDetail($default, 'ERROR');
         }
 
@@ -453,7 +463,7 @@ final class SharedFeatureflipCore
             try {
                 $inspector($event);
             } catch (\Throwable $e) {
-                error_log('[featureflip] evaluation inspector threw: ' . $e->getMessage());
+                $this->fail('evaluation inspector threw: ' . $e->getMessage());
             }
         }
     }
