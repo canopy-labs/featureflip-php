@@ -289,32 +289,55 @@ $client->boolVariation('unknown', [], false);          // false (default)
 
 ## Laravel Integration
 
+The package ships a service provider that Laravel discovers on its own. Install the SDK, plus Guzzle if the app doesn't already have it (Laravel's HTTP client depends on it), and set your key:
+
+```bash
+composer require featureflip/featureflip-php
+```
+
+```dotenv
+FEATUREFLIP_SDK_KEY=your-server-sdk-key
+```
+
+Then type-hint the client anywhere the container resolves:
+
 ```php
-// In a service provider
-$this->app->singleton(FeatureflipClient::class, function ($app) {
-    $psr17 = new \GuzzleHttp\Psr7\HttpFactory();
+use Featureflip\FeatureflipClient;
 
-    return FeatureflipClient::get(config('services.featureflip.sdk_key'), new Config(
-        // Illuminate's cache repository implements PSR-16, but the interface
-        // itself is not bound in the container — resolve the concrete store.
-        cache: $app->make('cache.store'),
-        // Laravel binds no PSR-18 client; construct one and give it a timeout,
-        // since the SDK fetches configuration on the calling thread.
-        httpClient: new \GuzzleHttp\Client(['timeout' => 5, 'connect_timeout' => 2]),
-        requestFactory: $psr17,
-        streamFactory: $psr17,
-        logger: $app->make(\Psr\Log\LoggerInterface::class),
-    ));
-});
-
-// In a controller
 public function index(FeatureflipClient $client)
 {
     $enabled = $client->boolVariation('new-checkout', ['user_id' => auth()->id()], false);
 }
 ```
 
-Even if accidentally registered as scoped or transient, the factory ensures all handles share one underlying connection.
+A `Featureflip` facade is registered too: `Featureflip::boolVariation('new-checkout', [], false)`.
+
+To change the defaults, publish the config file and edit `config/featureflip.php`:
+
+```bash
+php artisan vendor:publish --tag=featureflip-config
+```
+
+| Key | Env var | Default |
+|-----|---------|---------|
+| `sdk_key` | `FEATUREFLIP_SDK_KEY` | none (required) |
+| `base_url` | `FEATUREFLIP_BASE_URL` | `https://eval.featureflip.io` |
+| `poll_interval` | `FEATUREFLIP_POLL_INTERVAL` | `30` seconds |
+| `flush_interval` | `FEATUREFLIP_FLUSH_INTERVAL` | `30` seconds |
+| `flush_batch_size` | `FEATUREFLIP_FLUSH_BATCH_SIZE` | `100` |
+| `cache_store` | `FEATUREFLIP_CACHE_STORE` | your default cache store |
+| `http_timeout`, `connect_timeout` | `FEATUREFLIP_HTTP_TIMEOUT`, `FEATUREFLIP_CONNECT_TIMEOUT` | `5`, `2` seconds |
+| `log_channel` | `FEATUREFLIP_LOG_CHANNEL` | your default log channel |
+
+The flag configuration is stored in the cache store, so point `cache_store` at one every worker shares (Redis, database, Memcached or file). The `array` store lives for one process, so under PHP-FPM every request would refetch.
+
+The provider builds a Guzzle client with the timeouts above. To use your own PSR-18 client, bind `Psr\Http\Client\ClientInterface`, `Psr\Http\Message\RequestFactoryInterface` and `Psr\Http\Message\StreamFactoryInterface` in the container and the provider uses those instead. It sets the SDK's wrapper name so requests carry a `featureflip-laravel/<Laravel version>` User-Agent token.
+
+A missing SDK key throws an `InvalidArgumentException` the first time the client is resolved, and the message never contains the key.
+
+### PHP-FPM and Octane
+
+The client is a container singleton, and `FeatureflipClient::get()` shares one flag store per SDK key underneath it. Under PHP-FPM the process ends with each request, so the singleton lives for one request: it reads the configuration from the shared cache and flushes queued events when the process shuts down. Under Octane, RoadRunner or FrankenPHP the worker keeps the client across requests, and the SDK refreshes the configuration and drains events on its own schedule. Nothing in the provider closes the client per request, because a closed client stops evaluating.
 
 ## Migrating from 2.x
 
@@ -361,6 +384,7 @@ The class was renamed from `Client` to `FeatureflipClient` and the factory from 
 - **Evaluation inspectors** - In-process `onEvaluation` hook for analytics/debugging
 - **Test support** - `forTesting()` factory for deterministic unit tests
 - **Resilient** - Serves last-known-good configuration through an evaluation API outage
+- **Laravel-ready** - Auto-discovered service provider, publishable config and facade
 - **Worker-aware** - Refreshes flags and drains events under Octane/RoadRunner/FrankenPHP/Swoole
 - **Introspectable** - `isInitialized()` reports whether a configuration was ever loaded
 - **PSR-compatible** - Uses PSR-16 (cache), PSR-17/18 (HTTP), PSR-3 (logging)

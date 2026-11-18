@@ -7,6 +7,16 @@
      alone fails the build. What it cannot see is a tag cut without touching
      either file: the publish workflow takes the version from the tag, so the
      notes would stay under "Unreleased" while that version ships. -->
+## 3.8.0 — 2026-11-18
+
+### Added
+
+- A Laravel service provider, `Featureflip\Laravel\FeatureflipServiceProvider`, auto-discovered through `extra.laravel.providers`. It binds `FeatureflipClient` as a container singleton from `config/featureflip.php` (publish it with `php artisan vendor:publish --tag=featureflip-config`; `FEATUREFLIP_SDK_KEY` and the other `FEATUREFLIP_*` variables), uses a Guzzle client with timeouts unless you bind your own PSR-18 client, and adds a `Featureflip` facade. Laravel is a `suggest`, never a requirement. Requests carry a `featureflip-laravel` User-Agent token.
+
+### Fixed
+
+- A failing PSR-16 cache no longer escapes `FeatureflipClient::get()`, `boolVariation()` or the other typed reads. A cache backend that throws (Laravel's `database` store before its table is migrated, a Redis store with Redis down, or any PSR-16 `InvalidArgumentException`) is logged through the configured logger: a failed snapshot read starts without the cached configuration, a failed write keeps serving the fetched configuration from memory, and a refresh backoff the cache cannot store is held in-process for the poll interval, so an outage of both the cache and the Evaluation API costs one fetch attempt per poll interval rather than one per second. ([#5777](https://github.com/canopy-labs/featureflip/issues/5777))
+
 ## 3.7.2 — 2026-11-16
 
 ### Security

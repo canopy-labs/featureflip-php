@@ -40,6 +40,12 @@ final class FlagStore
     private ?int $fetchedAt = null;
 
     /**
+     * In-process stand-in for the shared backoff marker, set only when that
+     * marker could not be written. See recordFailedRefresh().
+     */
+    private ?int $localBackoffUntil = null;
+
+    /**
      * @param int $ttl How long a snapshot stays *fresh* — the poll interval.
      *                 Deliberately NOT the cache entry's lifetime: entries are
      *                 written with no expiry so a snapshot outlives the moment
@@ -98,6 +104,7 @@ final class FlagStore
 
         $this->loaded = true;
         $this->fetchedAt = time();
+        $this->localBackoffUntil = null;
         $this->saveToCache();
     }
 
@@ -142,10 +149,29 @@ final class FlagStore
      * caller's request thread, because a failed fetch never marks the snapshot
      * fresh. The marker lives in the shared cache, so the backoff is honoured
      * across all worker processes rather than per-process.
+     *
+     * When the cache itself is failing, the marker is held in-process instead
+     * (see recordFailedRefresh()), and an unreadable marker counts as "not
+     * backing off": the caller's one-second in-process throttle still bounds
+     * the attempts, and a failed attempt then backs off here for the full
+     * poll interval.
      */
     public function isRefreshBackedOff(): bool
     {
-        return $this->cache->get($this->cacheKey('refresh_failed')) !== null;
+        if ($this->localBackoffUntil !== null) {
+            if (time() < $this->localBackoffUntil) {
+                return true;
+            }
+            $this->localBackoffUntil = null;
+        }
+
+        try {
+            return $this->cache->get($this->cacheKey('refresh_failed')) !== null;
+        } catch (\Throwable $e) {
+            $this->cacheFailed('read the refresh backoff marker', $e);
+
+            return false;
+        }
     }
 
     /**
@@ -156,7 +182,21 @@ final class FlagStore
         // At least a second, even when the poll interval is zero: a caller
         // asking to always refresh is not asking to re-dial an unreachable API
         // on every single evaluation.
-        $this->cache->set($this->cacheKey('refresh_failed'), time(), max(1, $this->ttl));
+        $backoff = max(1, $this->ttl);
+
+        try {
+            $written = $this->cache->set($this->cacheKey('refresh_failed'), time(), $backoff);
+        } catch (\Throwable $e) {
+            $this->cacheFailed('write the refresh backoff marker', $e);
+            $written = false;
+        }
+
+        // A marker the cache would not take must not mean "no backoff": with
+        // the evaluation API down too, this process would then re-dial it
+        // every second. Hold it here instead, for this process only. Only in
+        // that case, so a healthy cache keeps the shared marker authoritative
+        // and a successful fetch in another worker still ends the backoff.
+        $this->localBackoffUntil = $written === false ? time() + $backoff : null;
     }
 
     /**
@@ -174,7 +214,18 @@ final class FlagStore
      */
     private function loadFromCache(): void
     {
-        $snapshot = $this->cache->get($this->cacheKey('snapshot'));
+        // The cache is the host's, and a host cache can be down: Laravel's
+        // database store before `migrate` has run, a Redis store with Redis
+        // unreachable. Their exceptions are not PSR-16's, so anything thrown
+        // here means "no snapshot", never a failure of the caller (#5777).
+        try {
+            $snapshot = $this->cache->get($this->cacheKey('snapshot'));
+        } catch (\Throwable $e) {
+            $this->cacheFailed('read the cached flag configuration; starting without it', $e);
+
+            return;
+        }
+
         if (!is_array($snapshot) || !isset($snapshot['flags'], $snapshot['segments'])) {
             return;
         }
@@ -214,8 +265,12 @@ final class FlagStore
                 $segments[$segment->key] = $segment;
             }
         } catch (\Throwable $e) {
-            $this->cache->delete($this->cacheKey('snapshot'));
-            $this->logger->warning('discarded an unreadable cached flag configuration: ' . $e->getMessage());
+            try {
+                $this->cache->delete($this->cacheKey('snapshot'));
+            } catch (\Throwable $deleteError) {
+                $this->cacheFailed('delete the unreadable cached flag configuration', $deleteError);
+            }
+            $this->warn('discarded an unreadable cached flag configuration: ' . $e->getMessage());
 
             return;
         }
@@ -236,22 +291,52 @@ final class FlagStore
      */
     private function saveToCache(): void
     {
-        $written = $this->cache->set($this->cacheKey('snapshot'), [
-            'flags' => array_map(fn(Flag $f) => $this->flagToArray($f), array_values($this->flags)),
-            'segments' => array_map(fn(Segment $s) => $this->segmentToArray($s), array_values($this->segments)),
-            'fetchedAt' => $this->fetchedAt,
-        ], self::RETENTION_TTL);
+        // A cache that throws leaves the in-memory store just as usable as one
+        // that returns false, so both are reported the same way below.
+        try {
+            $written = $this->cache->set($this->cacheKey('snapshot'), [
+                'flags' => array_map(fn(Flag $f) => $this->flagToArray($f), array_values($this->flags)),
+                'segments' => array_map(fn(Segment $s) => $this->segmentToArray($s), array_values($this->segments)),
+                'fetchedAt' => $this->fetchedAt,
+            ], self::RETENTION_TTL);
+        } catch (\Throwable $e) {
+            $this->cacheFailed('write the flag configuration', $e);
+            $written = false;
+        }
 
-        $this->cache->delete($this->cacheKey('refresh_failed'));
+        try {
+            $this->cache->delete($this->cacheKey('refresh_failed'));
+        } catch (\Throwable $e) {
+            $this->cacheFailed('clear the refresh backoff marker', $e);
+        }
 
         // A cache that rejects the write (an over-quota Memcached item, a Redis
         // OOM, a read-only filesystem) leaves every process to refetch the whole
         // configuration inline on every request — the exact cost the backoff
         // exists to avoid, and invisible unless the return value is checked.
         if ($written === false) {
-            $this->logger->warning(
+            $this->warn(
                 'could not cache the flag configuration; every request will refetch it until the cache accepts writes',
             );
+        }
+    }
+
+    private function cacheFailed(string $action, \Throwable $e): void
+    {
+        $this->warn(sprintf('the cache failed to %s: %s: %s', $action, $e::class, $e->getMessage()));
+    }
+
+    /**
+     * Report without ever failing the caller: this runs on the evaluation path,
+     * and the PSR-3 logger is the host's code (Monolog throws when it cannot
+     * open its stream). Same guard as SharedFeatureflipCore::warn().
+     */
+    private function warn(string $message): void
+    {
+        try {
+            $this->logger->warning($message);
+        } catch (\Throwable) {
+            // Nowhere left to report to.
         }
     }
 

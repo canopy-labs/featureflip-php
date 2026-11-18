@@ -34,7 +34,22 @@
         "guzzlehttp/guzzle": "^7.0",
         "symfony/cache": "^7.0",
         "guzzlehttp/psr7": "^2.0",
-        "phpstan/phpstan": "^2.1"
+        "phpstan/phpstan": "^2.1",
+        "orchestra/testbench": "^9.0 || ^10.0 || ^11.0"
+    },
+    "suggest": {
+        "illuminate/support": "Enables the Laravel service provider (Featureflip\\Laravel\\FeatureflipServiceProvider), auto-discovered by Laravel 11+",
+        "guzzlehttp/guzzle": "Used by the Laravel service provider as the default PSR-18 client when none is bound in the container"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Featureflip\\Laravel\\FeatureflipServiceProvider"
+            ],
+            "aliases": {
+                "Featureflip": "Featureflip\\Laravel\\Facades\\Featureflip"
+            }
+        }
     },
     "autoload": {
         "psr-4": {
