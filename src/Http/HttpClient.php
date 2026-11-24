@@ -28,7 +28,7 @@ class HttpClient
      * CHANGELOG.md's newest heading by tools/check-sdk-versions (CI workflow
      * sdk-version-consistency.yml). Bump both together.
      */
-    private const VERSION = '3.8.0';
+    private const VERSION = '3.8.1';
 
     /** Why the most recent post failed, for the caller to classify and report. */
     private ?PostFailure $lastFailure = null;

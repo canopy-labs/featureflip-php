@@ -7,6 +7,12 @@
      alone fails the build. What it cannot see is a tag cut without touching
      either file: the publish workflow takes the version from the tag, so the
      notes would stay under "Unreleased" while that version ships. -->
+## 3.8.1 — 2026-11-24
+
+### Changed
+
+- Installs alongside Guzzle 8 and `guzzlehttp/psr7` 3 as well as Guzzle 7 and psr7 2, so a Laravel 13 app that has moved to Guzzle 8 can require the SDK. Guzzle is still only the default HTTP client; any PSR-18 client works.
+
 ## 3.8.0 — 2026-11-18
 
 ### Added
